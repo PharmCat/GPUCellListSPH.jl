@@ -66,7 +66,7 @@ fill!(cellcounter, 0)
 fill!(celllist, 0)
 fill!(pairs, (zero(Int32), zero(Int32), NaN))
 
-cellmap2d!(pcell, points, h, offset)
+cellmap_2d!(pcell, points, h, offset)
 fillcells_cspwn_2d!(celllist, cellpnum,  pcell)
 neib_internal_2d!(pairs, cellcounter, cellpnum, celllist, points, dist)
 
@@ -84,7 +84,7 @@ fill!(cellcounter, 0)
 fill!(celllist, 0)
 fill!(pairs, (zero(Int32), zero(Int32), NaN))
 
-cellmap2d!(pcell, points, h, offset)
+cellmap_2d!(pcell, points, h, offset)
 fillcells_cspwn_2d!(celllist, cellpnum,  pcell)
 neib_internal_2d!(pairs, cellcounter, cellpnum, celllist, points, dist)
 
@@ -105,7 +105,7 @@ fill!(cellpnum, 0)
 fill!(cellcounter, 0)
 fill!(celllist, 0)
 fill!(pairs, (zero(Int32), zero(Int32), NaN))
-cellmap2d!(pcell, points, h, offset)
+cellmap_2d!(pcell, points, h, offset)
 fillcells_cspwn_2d!(celllist, cellpnum,  pcell)
 neib_internal_2d!(pairs, cellcounter, cellpnum, celllist, points, dist)
 
@@ -177,3 +177,76 @@ GPUCellListSPH.update!(system)
 count(x-> !isnan(x[3]), system.pairs) == sum(system.cellcounter)
 
 @benchmark GPUCellListSPH.update!($system)
+
+
+@benchmark GPUCellListSPH.partialupdate!($system)
+
+using CSV, DataFrames
+path         = dirname(@__FILE__)
+fluid_csv    = joinpath(path, "./input/FluidPoints_Dp0.02.csv")
+boundary_csv = joinpath(path, "./input/BoundaryPoints_Dp0.02.csv")
+
+
+cpupoints, DF_FLUID, DF_BOUND    = GPUCellListSPH.loadparticles(fluid_csv, boundary_csv)
+dx  = 0.02
+H   = 1.2 * sqrt(2) * dx
+system = GPUCellListSPH.GPUCellList(cpupoints, (2H, 2H), 2H)
+GPUCellListSPH.update!(system)
+
+@benchmark GPUCellListSPH.update!($system)
+
+@benchmark GPUCellListSPH.partialupdate!($system)
+
+
+
+    dx  = 0.02
+    H   = 1.2 * sqrt(2) * dx
+
+    cellsize = (2H, 2H)
+    points = cu(cpupoints)
+    N      = length(points)
+    pcell = CUDA.fill((Int32(0), Int32(0)), N)
+    pvec  = CUDA.zeros(Int32, N)
+    cs1 = cellsize[1]
+    cs2 = cellsize[2]
+    MIN1   = minimum(x->x[1], points) 
+    MIN1   = MIN1 - abs((MIN1 + sqrt(eps())) * sqrt(eps()))
+    MAX1   = maximum(x->x[1], points) 
+    MIN2   = minimum(x->x[2], points) 
+    MIN2   = MIN2 - abs((MIN1 + sqrt(eps())) * sqrt(eps()))
+    MAX2   = maximum(x->x[2], points)
+    range1 = MAX1 - MIN1
+    range2 = MAX2 - MIN2
+    CELL1  = ceil(Int, range1/cs1)
+    CELL2  = ceil(Int, range1/cs2)
+
+    cellpnum     = CUDA.zeros(Int32, CELL1, CELL2)
+    cellcounter  = CUDA.zeros(Int32, CELL1, CELL2)
+
+    cellmap_2d!(pcell, points, (cs1, cs2), (MIN1, MIN2))
+
+    cellpnum_2d!(cellpnum, points,  (cs1, cs2), (MIN1, MIN2))
+
+    mppcell = maxpoint = maximum(cellpnum)
+    mpair    = maxpoint^2*3
+
+    celllist     = CUDA.zeros(Int32, CELL1, CELL2, mppcell)
+
+    #fillcells_cspwn_2d!(celllist, cellcounter,  pcell)
+    fillcells_naive_2d!(celllist, cellcounter,  pcell)
+
+    pairs    = CUDA.fill((zero(Int32), zero(Int32), NaN), mpair, CELL1, CELL2)
+    fill!(cellcounter, zero(Int32))
+    neib_internal_2d!(pairs, cellcounter, cellpnum, celllist, points, dist)
+    neib_external_2d!(pairs, cellcounter, cellpnum, points, celllist,  (0, 1), dist)
+    neib_external_2d!(pairs, cellcounter, cellpnum, points, celllist,  (1, 1), dist)
+    neib_external_2d!(pairs, cellcounter, cellpnum, points, celllist,  (1, 0), dist)
+
+
+
+
+
+
+    @benchmark  update!($system, $points)
+    @benchmark  list = neighborlist!($system)
+
