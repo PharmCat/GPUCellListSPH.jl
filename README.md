@@ -3,7 +3,7 @@
 
 
 
-```
+```julia
 using CUDA, BenchmarkTools
 
 cpupoints = map(x->tuple(x...), eachrow(rand(Float64, 200000, 3)))
@@ -31,18 +31,17 @@ count(x-> !isnan(x[3]), system.pairs) == sum(system.cellcounter)
 
 @benchmark GPUCellListSPH.update!($system)
 
-```
+```julia
 @benchmark GPUCellListSPH.update!($system)
 
-BenchmarkTools.Trial: 53 samples with 1 evaluation.
- Range (min … max):  94.191 ms …  96.047 ms  ┊ GC (min … max): 0.00% … 0.00%
- Time  (median):     94.836 ms               ┊ GC (median):    0.00%
- Time  (mean ± σ):   94.915 ms ± 362.567 μs  ┊ GC (mean ± σ):  0.00% ± 0.00%
+BenchmarkTools.Trial: 108 samples with 1 evaluation.
+ Range (min … max):  46.203 ms …  47.297 ms  ┊ GC (min … max): 0.00% … 0.00%
+ Time  (median):     46.593 ms               ┊ GC (median):    0.00%
+ Time  (mean ± σ):   46.616 ms ± 184.553 μs  ┊ GC (mean ± σ):  0.00% ± 0.00%
 
-            ▁  ▄   ▄  ▁▄█▁ ▁ █     ▄  ▄▁        ▁
-  ▆▁▁▆▁▁▁▁▆▁█▆▁█▁▁▆█▆▆████▆█▆█▁▁▆▁▆█▁▁██▁▆▆▁▁▁▁▆█▆▆▁▁▁▁▁▁▁▁▁▁▆ ▁
-  94.2 ms         Histogram: frequency by time         95.8 ms <
+              ▂  ▂▂ ▆ ▆ █▂▄▄▄▄▂   ▂
+  ▆▁▁▁▁▁▁▁█▄▁▄█▄▄██▆███▆███████▄████▄▆▆▁▁▄▆▆▄▁▆▁▁▁▁▁▆▁▄▁▁▁▁▄▁▄ ▄
+  46.2 ms         Histogram: frequency by time         47.2 ms <
 
- Memory estimate: 30.69 KiB, allocs estimate: 519.
-```
+ Memory estimate: 29.17 KiB, allocs estimate: 485.
 ```

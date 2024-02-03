@@ -194,20 +194,17 @@ end
 
 
 
-
-
-# NOT FOR USE
-function kernel_fillcells_naiveunsave_2d!(celllist, cellpnum, pcell) 
+function kernel_fillcells_naive_2d!(celllist, cellpnum, pcell) 
     indexᵢ = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
     if indexᵢ <= length(pcell) 
         pᵢ, pⱼ = pcell[indexᵢ]
         n = CUDA.@atomic cellpnum[pᵢ, pⱼ] += 1
-        CUDA.@atomic celllist[pᵢ, pⱼ, n] += indexᵢ
+        celllist[pᵢ, pⱼ, n+1] = indexᵢ
     end
     return nothing
 end
-function fillcells_naiveunsave_2d!(celllist, cellpnum, pcell)  
-    kernel = @cuda launch=false kernel_fillcells_naiveunsave_2d!(celllist, cellpnum, pcell) 
+function fillcells_naive_2d!(celllist, cellpnum, pcell)  
+    kernel = @cuda launch=false kernel_fillcells_naive_2d!(celllist, cellpnum, pcell) 
     config = launch_configuration(kernel.fun)
     threads = min(length(pcell), config.threads)
     blocks = cld(length(pcell), threads)

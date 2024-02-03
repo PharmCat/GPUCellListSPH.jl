@@ -142,14 +142,13 @@ cellmap_2d!(pcell, points, h, offset)
 
 
 
-#=
+
 fill!(cellpnum, 0)
 fill!(cellcounter, 0)
 fill!(celllist, 0)
 fill!(pairs, (zero(Int32), zero(Int32), NaN))
 cellmap_2d!(pcell, points, h, offset)
-fillcells_naiveunsave_2d!(celllist, cellpnum,  pcell) 
-=#
+fillcells_naive_2d!(celllist, cellcounter,  pcell) 
 
 
 using BenchmarkTools
