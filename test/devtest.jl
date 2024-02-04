@@ -100,7 +100,6 @@ neib_external_2d!(pairs, cellcounter, cellpnum, points, celllist,  (1, 1), dist)
 maximum(cellcounter) <= MPPAIR
 count(x-> !isnan(x[3]), pairs) == sum(cellcounter)
 
-
 fill!(cellpnum, 0)
 fill!(cellcounter, 0)
 fill!(celllist, 0)
@@ -110,7 +109,6 @@ fillcells_cspwn_2d!(celllist, cellpnum,  pcell)
 neib_internal_2d!(pairs, cellcounter, cellpnum, celllist, points, dist)
 
 @benchmark neib_external_2d!($copy(pairs), $copy(cellcounter), cellpnum, points, celllist,  (0, 1), dist)
-
 
 fill!(cellpnum, 0)
 fill!(cellcounter, 0)
@@ -140,15 +138,16 @@ cellmap_2d!(pcell, points, h, offset)
 @btime fillcells_psort_2d!($copy(celllist), $copy(cellpnum), pvec, pcell)
 
 
-
-
-
 fill!(cellpnum, 0)
 fill!(cellcounter, 0)
 fill!(celllist, 0)
 fill!(pairs, (zero(Int32), zero(Int32), NaN))
 cellmap_2d!(pcell, points, h, offset)
 fillcells_naive_2d!(celllist, cellcounter,  pcell) 
+
+
+
+
 
 
 using BenchmarkTools
@@ -188,21 +187,13 @@ boundary_csv = joinpath(path, "./input/BoundaryPoints_Dp0.02.csv")
 
 
 cpupoints, DF_FLUID, DF_BOUND    = GPUCellListSPH.loadparticles(fluid_csv, boundary_csv)
-dx  = 0.02
-H   = 1.2 * sqrt(2) * dx
-system = GPUCellListSPH.GPUCellList(cpupoints, (2H, 2H), 2H)
-GPUCellListSPH.update!(system)
-
-@benchmark GPUCellListSPH.update!($system)
-
-@benchmark GPUCellListSPH.partialupdate!($system)
-
 
 
     dx  = 0.02
-    H   = 1.2 * sqrt(2) * dx
-
-    cellsize = (2H, 2H)
+    h   = 1.2 * sqrt(2) * dx
+    h⁻¹ = 1/h
+    dist = 2h
+    cellsize = (2h, 2h)
     points = cu(cpupoints)
     N      = length(points)
     pcell = CUDA.fill((Int32(0), Int32(0)), N)
@@ -223,30 +214,53 @@ GPUCellListSPH.update!(system)
     cellpnum     = CUDA.zeros(Int32, CELL1, CELL2)
     cellcounter  = CUDA.zeros(Int32, CELL1, CELL2)
 
-    cellmap_2d!(pcell, points, (cs1, cs2), (MIN1, MIN2))
+    GPUCellListSPH.cellmap_2d!(pcell, points, (cs1, cs2), (MIN1, MIN2))
 
-    cellpnum_2d!(cellpnum, points,  (cs1, cs2), (MIN1, MIN2))
+    GPUCellListSPH.cellpnum_2d!(cellpnum, points,  (cs1, cs2), (MIN1, MIN2))
 
-    mppcell = maxpoint = maximum(cellpnum)
+    mppcell  = maxpoint = maximum(cellpnum)
     mpair    = maxpoint^2*3
 
     celllist     = CUDA.zeros(Int32, CELL1, CELL2, mppcell)
 
     #fillcells_cspwn_2d!(celllist, cellcounter,  pcell)
-    fillcells_naive_2d!(celllist, cellcounter,  pcell)
+    GPUCellListSPH.fillcells_naive_2d!(celllist, cellcounter,  pcell)
 
     pairs    = CUDA.fill((zero(Int32), zero(Int32), NaN), mpair, CELL1, CELL2)
     fill!(cellcounter, zero(Int32))
-    neib_internal_2d!(pairs, cellcounter, cellpnum, celllist, points, dist)
-    neib_external_2d!(pairs, cellcounter, cellpnum, points, celllist,  (0, 1), dist)
-    neib_external_2d!(pairs, cellcounter, cellpnum, points, celllist,  (1, 1), dist)
-    neib_external_2d!(pairs, cellcounter, cellpnum, points, celllist,  (1, 0), dist)
+    GPUCellListSPH.neib_internal_2d!(pairs, cellcounter, cellpnum, celllist, points, dist)
+    GPUCellListSPH.neib_external_2d!(pairs, cellcounter, cellpnum, points, celllist,  (0, 1), dist)
+    GPUCellListSPH.neib_external_2d!(pairs, cellcounter, cellpnum, points, celllist,  (1, 1), dist)
+    GPUCellListSPH.neib_external_2d!(pairs, cellcounter, cellpnum, points, celllist,  (1, 0), dist)
+
+    using SPHKernels
+    sphkernel    = WendlandC6(Float64, 2)
+
+    sumW = CUDA.zeros(Float64, N)
+
+    GPUCellListSPH.∑ⱼWᵢⱼ!(sumW, cellcounter, pairs, sphkernel, h⁻¹) 
+
+    #CUDA.@device_code_typed GPUCellListSPH.∑ⱼWᵢⱼ!(sumW, cellcounter, pairs, sphkernel, h⁻¹)
+
+    @benchmark  GPUCellListSPH.∑ⱼWᵢⱼ!($copy(sumW), $cellcounter, $pairs, $sphkernel, $h⁻¹)
 
 
 
+    dx  = 0.02
+    H   = 1.2 * sqrt(2) * dx
+    system = GPUCellListSPH.GPUCellList(cpupoints, (H, H), H)
+    GPUCellListSPH.update!(system)
 
+    @benchmark GPUCellListSPH.update!($system)
+    @benchmark GPUCellListSPH.partialupdate!($system)
 
-
-    @benchmark  update!($system, $points)
-    @benchmark  list = neighborlist!($system)
-
+    #=
+    using SPHKernels
+    sphk     = WendlandC6(Float64, 3)
+    r     = 0.5
+    h     = 1.0
+    h_inv = 1.0 / h
+    u     = r * h_inv
+    val = 𝒲(sphk, u, h_inv)
+    d𝒲(sphk, u, h_inv)
+    =#

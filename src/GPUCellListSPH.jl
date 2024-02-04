@@ -1,11 +1,13 @@
 module GPUCellListSPH
 
-using CUDA, CSV, DataFrames
+using CUDA, SPHKernels, CSV, DataFrames
 
 export GPUCellList, update!
 
-include("kernels.jl")
+#include("sphkernels.jl")
+include("gpukernels.jl")
 include("structs.jl")
 include("auxillary.jl")
+include("sphproblem.jl")
 
 end

@@ -1,3 +1,7 @@
+#####################################################################
+# CELL LIST
+#####################################################################
+
 """
     Map each point to cell.
 """
@@ -207,3 +211,34 @@ function neib_external_2d!(pairs, cellcounter, cellpnum, points, celllist,  offs
     CUDA.@sync kernel(pairs, cellcounter, cellpnum, points, celllist,  offset, h; threads = threads, blocks = blocks)
 end
 
+#####################################################################
+# SPH
+#####################################################################
+
+"""
+    ∑ⱼWᵢⱼ
+
+
+"""
+function kernel_∑ⱼWᵢⱼ!(sumW, cellcounter, pairs, kernel, h⁻¹) 
+    indexᵢ = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
+    indexⱼ = (blockIdx().y - Int32(1)) * blockDim().y + threadIdx().y 
+    if indexᵢ <= size(cellcounter, 1) &&  indexⱼ <= size(cellcounter, 2) && cellcounter[indexᵢ, indexⱼ] > 0
+        for i = 1:cellcounter[indexᵢ, indexⱼ]
+            pair  = pairs[i, indexᵢ, indexⱼ]
+            pᵢ    = pair[1]; pⱼ = pair[2]; d = pair[3]
+            u     = d * h⁻¹
+            w     = 𝒲(kernel, u, h⁻¹)
+            CUDA.@atomic sumW[pᵢ] += w
+            CUDA.@atomic sumW[pⱼ] += w
+        end
+    end
+    return nothing
+end
+function ∑ⱼWᵢⱼ!(sumW, cellcounter, pairs, sphkernel, h⁻¹) 
+    gpukernel = @cuda launch=false kernel_∑ⱼWᵢⱼ!(sumW, cellcounter, pairs, sphkernel, h⁻¹) 
+    config = launch_configuration(gpukernel.fun)
+    threads = (min(size(cellcounter, 1), Int(floor(sqrt(config.threads)))), min(size(cellcounter, 2), Int(floor(sqrt(config.threads)))))
+    blocks = (cld(size(cellcounter, 1), threads[1]), cld(size(cellcounter, 2), threads[2]))
+    CUDA.@sync gpukernel(sumW, cellcounter, pairs, sphkernel, h⁻¹; threads = threads, blocks = blocks)
+end

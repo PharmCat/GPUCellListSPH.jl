@@ -1,5 +1,3 @@
-
-
 mutable struct GPUCellList
     n::Int
     dist
