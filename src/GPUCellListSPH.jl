@@ -1,6 +1,6 @@
 module GPUCellListSPH
 
-using CUDA, SPHKernels, CSV, DataFrames
+using CUDA, SPHKernels, CSV, DataFrames 
 
 export GPUCellList, update!
 

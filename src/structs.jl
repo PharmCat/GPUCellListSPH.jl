@@ -57,9 +57,10 @@ function GPUCellList(points, cellsize, dist; mppcell = 0, mpair = 0)
     pairs    = CUDA.fill((zero(Int32), zero(Int32), NaN), mpair, CELL1, CELL2)         # pair list 1-dim - pair, 2-dim X 3-dim - cell grid
     fill!(cellcounter, zero(Int32))                                                    # fill cell counter before neib calk
     neib_internal_2d!(pairs, cellcounter, cellpnum, celllist, points, dist)            # modify cellcounter, celllist < add pairs inside cell
-    neib_external_2d!(pairs, cellcounter, cellpnum, points, celllist,  (0, 1), dist)   # modify cellcounter, celllist < add pairs between cell and neiborhood cell by shift (0, 1) in grid
-    neib_external_2d!(pairs, cellcounter, cellpnum, points, celllist,  (1, 1), dist)   # modify cellcounter, celllist < add pairs between cell and neiborhood cell by shift (1, 1) in grid
-    neib_external_2d!(pairs, cellcounter, cellpnum, points, celllist,  (1, 0), dist)   # modify cellcounter, celllist < add pairs between cell and neiborhood cell by shift (0, 1) in grid
+    neib_external_2d!(pairs, cellcounter, cellpnum, points, celllist,  (1, -1), dist) 
+    neib_external_2d!(pairs, cellcounter, cellpnum, points, celllist,  (0,  1), dist)   # modify cellcounter, celllist < add pairs between cell and neiborhood cell by shift (0, 1) in grid
+    neib_external_2d!(pairs, cellcounter, cellpnum, points, celllist,  (1,  1), dist)   # modify cellcounter, celllist < add pairs between cell and neiborhood cell by shift (1, 1) in grid
+    neib_external_2d!(pairs, cellcounter, cellpnum, points, celllist,  (1,  0), dist)   # modify cellcounter, celllist < add pairs between cell and neiborhood cell by shift (0, 1) in grid
                                                                                        # now cellcounter - number of pairs for each particle
     GPUCellList(N, dist, cellsize, (MIN1, MIN2), (CELL1, CELL2), points, pcell, pvec, cellpnum, cellcounter, celllist, pairs)
 end
@@ -80,9 +81,10 @@ function update!(c::GPUCellList)
     fill!(c.cellcounter, zero(Int32))
     fill!(c.pairs, (zero(Int32), zero(Int32), NaN))
     neib_internal_2d!(c.pairs, c.cellcounter, c.cellpnum, c.celllist, c.points, c.dist)
-    neib_external_2d!(c.pairs, c.cellcounter, c.cellpnum, c.points, c.celllist,  (0, 1), c.dist)
-    neib_external_2d!(c.pairs, c.cellcounter, c.cellpnum, c.points, c.celllist,  (1, 1), c.dist)
-    neib_external_2d!(c.pairs, c.cellcounter, c.cellpnum, c.points, c.celllist,  (1, 0), c.dist)
+    neib_external_2d!(c.pairs, c.cellcounter, c.cellpnum, c.points, c.celllist,  (1, -1), c.dist)
+    neib_external_2d!(c.pairs, c.cellcounter, c.cellpnum, c.points, c.celllist,  (0,  1), c.dist)
+    neib_external_2d!(c.pairs, c.cellcounter, c.cellpnum, c.points, c.celllist,  (1,  1), c.dist)
+    neib_external_2d!(c.pairs, c.cellcounter, c.cellpnum, c.points, c.celllist,  (1,  0), c.dist)
 end
 
 """
@@ -94,8 +96,9 @@ function partialupdate!(c::GPUCellList)
     fill!(c.cellcounter, zero(Int32))
     fill!(c.pairs, (zero(Int32), zero(Int32), NaN))
     neib_internal_2d!(c.pairs, c.cellcounter, c.cellpnum, c.celllist, c.points, c.dist)
-    neib_external_2d!(c.pairs, c.cellcounter, c.cellpnum, c.points, c.celllist,  (0, 1), c.dist)
-    neib_external_2d!(c.pairs, c.cellcounter, c.cellpnum, c.points, c.celllist,  (1, 1), c.dist)
-    neib_external_2d!(c.pairs, c.cellcounter, c.cellpnum, c.points, c.celllist,  (1, 0), c.dist)
+    neib_external_2d!(c.pairs, c.cellcounter, c.cellpnum, c.points, c.celllist,  (1, -1), c.dist)
+    neib_external_2d!(c.pairs, c.cellcounter, c.cellpnum, c.points, c.celllist,  (0,  1), c.dist)
+    neib_external_2d!(c.pairs, c.cellcounter, c.cellpnum, c.points, c.celllist,  (1,  1), c.dist)
+    neib_external_2d!(c.pairs, c.cellcounter, c.cellpnum, c.points, c.celllist,  (1,  0), c.dist)
 end
 

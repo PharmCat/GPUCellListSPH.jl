@@ -180,7 +180,9 @@ count(x-> !isnan(x[3]), system.pairs) == sum(system.cellcounter)
 
 @benchmark GPUCellListSPH.partialupdate!($system)
 
-using CSV, DataFrames
+using GPUCellListSPH
+using CSV, DataFrames, CUDA
+using SPHKernels
 path         = dirname(@__FILE__)
 fluid_csv    = joinpath(path, "./input/FluidPoints_Dp0.02.csv")
 boundary_csv = joinpath(path, "./input/BoundaryPoints_Dp0.02.csv")
@@ -191,21 +193,23 @@ cpupoints, DF_FLUID, DF_BOUND    = GPUCellListSPH.loadparticles(fluid_csv, bound
 
     dx  = 0.02
     h   = 1.2 * sqrt(2) * dx
+    H   = 2h
     h⁻¹ = 1/h
-    dist = 2h
-    cellsize = (2h, 2h)
-    points = cu(cpupoints)
-    N      = length(points)
+    H⁻¹ = 1/H
+    dist = H
+    cellsize = (H, H)
+    gpupoints = cu(cpupoints)
+    N      = length(cpupoints)
     pcell = CUDA.fill((Int32(0), Int32(0)), N)
     pvec  = CUDA.zeros(Int32, N)
     cs1 = cellsize[1]
     cs2 = cellsize[2]
-    MIN1   = minimum(x->x[1], points) 
+    MIN1   = minimum(x->x[1], gpupoints) 
     MIN1   = MIN1 - abs((MIN1 + sqrt(eps())) * sqrt(eps()))
-    MAX1   = maximum(x->x[1], points) 
-    MIN2   = minimum(x->x[2], points) 
+    MAX1   = maximum(x->x[1], gpupoints) 
+    MIN2   = minimum(x->x[2], gpupoints) 
     MIN2   = MIN2 - abs((MIN1 + sqrt(eps())) * sqrt(eps()))
-    MAX2   = maximum(x->x[2], points)
+    MAX2   = maximum(x->x[2], gpupoints)
     range1 = MAX1 - MIN1
     range2 = MAX2 - MIN2
     CELL1  = ceil(Int, range1/cs1)
@@ -214,12 +218,13 @@ cpupoints, DF_FLUID, DF_BOUND    = GPUCellListSPH.loadparticles(fluid_csv, bound
     cellpnum     = CUDA.zeros(Int32, CELL1, CELL2)
     cellcounter  = CUDA.zeros(Int32, CELL1, CELL2)
 
-    GPUCellListSPH.cellmap_2d!(pcell, points, (cs1, cs2), (MIN1, MIN2))
+    GPUCellListSPH.cellmap_2d!(pcell, gpupoints, (cs1, cs2), (MIN1, MIN2))
 
-    GPUCellListSPH.cellpnum_2d!(cellpnum, points,  (cs1, cs2), (MIN1, MIN2))
+    GPUCellListSPH.cellpnum_2d!(cellpnum, gpupoints,  (cs1, cs2), (MIN1, MIN2))
 
     mppcell  = maxpoint = maximum(cellpnum)
     mpair    = maxpoint^2*3
+    mpair    = 300
 
     celllist     = CUDA.zeros(Int32, CELL1, CELL2, mppcell)
 
@@ -228,26 +233,70 @@ cpupoints, DF_FLUID, DF_BOUND    = GPUCellListSPH.loadparticles(fluid_csv, bound
 
     pairs    = CUDA.fill((zero(Int32), zero(Int32), NaN), mpair, CELL1, CELL2)
     fill!(cellcounter, zero(Int32))
-    GPUCellListSPH.neib_internal_2d!(pairs, cellcounter, cellpnum, celllist, points, dist)
-    GPUCellListSPH.neib_external_2d!(pairs, cellcounter, cellpnum, points, celllist,  (0, 1), dist)
-    GPUCellListSPH.neib_external_2d!(pairs, cellcounter, cellpnum, points, celllist,  (1, 1), dist)
-    GPUCellListSPH.neib_external_2d!(pairs, cellcounter, cellpnum, points, celllist,  (1, 0), dist)
+    GPUCellListSPH.neib_internal_2d!(pairs, cellcounter, cellpnum, celllist, gpupoints, dist)
+    GPUCellListSPH.neib_external_2d!(pairs, cellcounter, cellpnum, gpupoints, celllist,  (1, -1), dist)
+    GPUCellListSPH.neib_external_2d!(pairs, cellcounter, cellpnum, gpupoints, celllist,  (0, 1), dist)
+    GPUCellListSPH.neib_external_2d!(pairs, cellcounter, cellpnum, gpupoints, celllist,  (1, 1), dist)
+    GPUCellListSPH.neib_external_2d!(pairs, cellcounter, cellpnum, gpupoints, celllist,  (1, 0), dist)
 
-    using SPHKernels
-    sphkernel    = WendlandC6(Float64, 2)
+    sphkernel    = WendlandC2(Float64, 2)
 
     sumW = CUDA.zeros(Float64, N)
 
-    GPUCellListSPH.∑ⱼWᵢⱼ!(sumW, cellcounter, pairs, sphkernel, h⁻¹) 
+    GPUCellListSPH.∑W_2d!(sumW, cellcounter, pairs, sphkernel, H⁻¹)
+
+    sum∇W = CUDA.zeros(Float64, N, 2)
+    ∇Wₙ    =  CUDA.fill((zero(Float64), zero(Float64)), mpair, CELL1, CELL2)
+
+    GPUCellListSPH.∑∇W_2d!(sum∇W, ∇Wₙ, cellcounter, pairs, gpupoints, sphkernel, H⁻¹) 
+
+
+    # (1, 4867, 0.06) # r 
+
+    h     = H * 0.5
+    h⁻¹   = 1 / h
+
+    d  =  sqrt((cpupoints[1][1] -  cpupoints[4867][1])^2 + (cpupoints[1][2] -  cpupoints[4867][2])^2)
+    αD  = (7/(4 * π * H^2)) # <<
+    SPHExample.Wᵢⱼ(αD, d/2H) 
+
+
+    αD  = (7/( π * H^2 * 2))
+    SPHExample.Wᵢⱼ(αD, d/2H)
+
+
+    sphn = sphkernel.norm * (1/2H)^sphkernel.dim
+
+    val = 𝒲(sphkernel, d/2H, 1/2H)
+    
+    
+    
+    αD  = (7/( π * h^2 * 16))
+
+    αD  = 7/π * h⁻¹^2
+    SPHExample.Wᵢⱼ(1/H^2, d/H) * 7/π
+    
+    val = 𝒲(sphkernel, d/2H, 1/2H)
+
+    sphn = sphkernel.norm * h⁻¹^sphkernel.dim
+    t1 = 1 - u
+    t4 = t1 * t1 * t1 * t1
+    (t4 * (1 + 4u)) * sphn
+
+
 
     #CUDA.@device_code_typed GPUCellListSPH.∑ⱼWᵢⱼ!(sumW, cellcounter, pairs, sphkernel, h⁻¹)
 
-    @benchmark  GPUCellListSPH.∑ⱼWᵢⱼ!($copy(sumW), $cellcounter, $pairs, $sphkernel, $h⁻¹)
+    @benchmark  GPUCellListSPH.∑W_2d!($copy(sumW), $cellcounter, $pairs, $sphkernel, $h⁻¹)
 
+    @benchmark GPUCellListSPH.∑∇W_2d!($copy(sum∇W), $∇Wₙ, $cellcounter, $pairs, $points, $sphkernel, $h⁻¹) 
 
 
     dx  = 0.02
     H   = 1.2 * sqrt(2) * dx
+    h   = H/2
+    h⁻¹ = 1/h
+    dist = 2H
     system = GPUCellListSPH.GPUCellList(cpupoints, (H, H), H)
     GPUCellListSPH.update!(system)
 
@@ -263,4 +312,76 @@ cpupoints, DF_FLUID, DF_BOUND    = GPUCellListSPH.loadparticles(fluid_csv, bound
     u     = r * h_inv
     val = 𝒲(sphk, u, h_inv)
     d𝒲(sphk, u, h_inv)
+
+    SPHKernels.∇𝒲
     =#
+
+    using SPHKernels, StaticArrays
+    sphk     = WendlandC2(Float64, 2)
+    r     = 0.5
+    h     = 1.0
+    h_inv = 1.0 / h
+    u     = r * h_inv
+    val = 𝒲(sphk, u, h_inv)
+
+    Δx    = SVector((0.1,0.1,0.1))
+    ∇𝒲(sphk, r, h⁻¹, Δx)
+
+
+    val = 𝒲(sphk, u, h_inv)
+
+    d𝒲(sphk, u, h_inv)
+
+    ∇𝒲(sphk, r, h⁻¹, Δx)
+
+function sdf(list, pairs)
+    inds = Int[]
+    for i = 1:length(list)
+        el1 = findfirst(x-> x[1] == list[i][1] && x[2] == list[i][2], pairs)
+        el2 = findfirst(x-> x[2] == list[i][1] && x[1] == list[i][2], pairs)
+        if isnothing(el1) && isnothing(el2) push!(inds, i) end
+    end
+    inds
+end
+sdfinds = sdf(list, Array(pairs))
+
+
+function btpn(cpupoints, dist)
+    n = 0
+    for i = 1:length(cpupoints)-1
+        for j = i+1:length(cpupoints)
+            if sqrt((cpupoints[i][1] -  cpupoints[j][1])^2 + (cpupoints[i][2] -  cpupoints[j][2])^2) < dist 
+                n += 1 
+            end
+        end
+    end
+    n
+end
+btpn(cpupoints, dist)
+
+
+
+
+    d  = 0.2
+    H  = 0.3
+    αD  = (7/(4 * π * H^2)) 
+    SPHExample.Wᵢⱼ(αD, d/2H) 
+
+
+    using SPHKernels
+    sphkernel    = WendlandC2(Float64, 2)
+    𝒲(sphkernel, d/2H, 1/2H)
+
+
+    using SPHKernels
+    function Wᵢⱼ(αD, q)
+        return αD * (1 - q) ^ 4 * (1 + 4q)
+    end
+    d    = 0.2
+    H    = 0.3
+    αD  = (7/(4 * π * H^2)) 
+    w1 =  Wᵢⱼ(αD, d/2H) 
+    sphkernel    = WendlandC2(Float64, 2)
+    w2 =   𝒲(sphkernel, d/2H, 1/2H)
+    w1 ≈ w2
+
