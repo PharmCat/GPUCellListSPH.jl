@@ -147,9 +147,6 @@ fillcells_naive_2d!(celllist, cellcounter,  pcell)
 
 
 
-
-
-
 using BenchmarkTools
 
 cpupoints = map(x->tuple(x...), eachrow(rand(Float64, 200000, 3)))
@@ -190,6 +187,11 @@ boundary_csv = joinpath(path, "./input/BoundaryPoints_Dp0.02.csv")
 
 cpupoints, DF_FLUID, DF_BOUND    = GPUCellListSPH.loadparticles(fluid_csv, boundary_csv)
 
+    ρ   = cu(Array([DF_FLUID.Rhop;DF_BOUND.Rhop]))
+    ml  = cu([ ones(size(DF_FLUID,1)) ; zeros(size(DF_BOUND,1))])
+    gf = cu([-ones(size(DF_FLUID,1)) ; ones(size(DF_BOUND,1))])
+    v   = CUDA.fill((0.0, 0.0), length(cpupoints))
+    a   = CUDA.zeros(Float64, length(cpupoints))
 
     dx  = 0.02
     h   = 1.2 * sqrt(2) * dx
@@ -197,6 +199,16 @@ cpupoints, DF_FLUID, DF_BOUND    = GPUCellListSPH.loadparticles(fluid_csv, bound
     h⁻¹ = 1/h
     H⁻¹ = 1/H
     dist = H
+    ρ₀  = 1000
+    m₀  = ρ₀ * dx * dx #mᵢ  = mⱼ = m₀
+    α   = 0.01
+    g   = 9.81
+    c₀  = sqrt(g * 2) * 20
+    γ   = 7
+    dt  = 1e-5
+    δᵩ  = 0.1
+    CFL = 0.2
+
     cellsize = (H, H)
     gpupoints = cu(cpupoints)
     N      = length(cpupoints)
@@ -250,138 +262,77 @@ cpupoints, DF_FLUID, DF_BOUND    = GPUCellListSPH.loadparticles(fluid_csv, bound
 
     GPUCellListSPH.∑∇W_2d!(sum∇W, ∇Wₙ, cellcounter, pairs, gpupoints, sphkernel, H⁻¹) 
 
+    ∑∂ρ∂t = CUDA.zeros(Float64, N)
+
+    GPUCellListSPH.∂ρ∂tDDT!(∑∂ρ∂t,  ∇Wₙ, cellcounter, pairs, gpupoints, h, m₀, δᵩ, c₀, γ, g, ρ₀, ρ, v, ml) 
+
+    ∑∂Π∂t = CUDA.zeros(Float64, N, 2)
+    
+
+    GPUCellListSPH.∂Π∂t!(∑∂Π∂t, ∇Wₙ, cellcounter, pairs, gpupoints, h, ρ, α, v, c₀, m₀)
+    
+    ∑∂v∂t = CUDA.zeros(Float64, N, 2)
+
+    GPUCellListSPH.∂v∂t!(∑∂v∂t,  ∇Wₙ, cellcounter, pairs, gpupoints, m₀, ρ, c₀, γ, ρ₀) 
+
+
+
+    #CUDA.registers(@cuda GPUCellListSPH.kernel_∂ρ∂tDDT!(∑∂ρ∂t,  ∇Wₙ, cellcounter, pairs, gpupoints, h, m₀, δᵩ, c₀, γ, g, ρ₀, ρ, v, ml))
+
 
     # (1, 4867, 0.06) # r 
+    list[1] # 1 4707
+    ind1 = findfirst(x-> (x[1] == 1 && x[2] == 4707) || (x[2] == 1 && x[1] == 4707), pairs) #
+    pair  = pairs[34, 1, 1] # 4707 1
+    pᵢ    = pair[1]; pⱼ = pair[2]; d = pair[3]
+    xᵢ    = cpupoints[pᵢ]
+    xⱼ    = cpupoints[pⱼ]
+    u     = d * H⁻¹
+    dwk_r = d𝒲(sphkernel, u, H⁻¹) / d
+    ∇w    = ((xᵢ[1] - xⱼ[1]) * dwk_r, (xᵢ[2] - xⱼ[2]) * dwk_r)
+    ∇Wₙ[34, 1, 1]
+    WgL[1]
 
-    h     = H * 0.5
-    h⁻¹   = 1 / h
-
-    d  =  sqrt((cpupoints[1][1] -  cpupoints[4867][1])^2 + (cpupoints[1][2] -  cpupoints[4867][2])^2)
-    αD  = (7/(4 * π * H^2)) # <<
-    SPHExample.Wᵢⱼ(αD, d/2H) 
-
-
-    αD  = (7/( π * H^2 * 2))
-    SPHExample.Wᵢⱼ(αD, d/2H)
-
-
-    sphn = sphkernel.norm * (1/2H)^sphkernel.dim
-
-    val = 𝒲(sphkernel, d/2H, 1/2H)
-    
-    
-    
-    αD  = (7/( π * h^2 * 16))
-
-    αD  = 7/π * h⁻¹^2
-    SPHExample.Wᵢⱼ(1/H^2, d/H) * 7/π
-    
-    val = 𝒲(sphkernel, d/2H, 1/2H)
-
-    sphn = sphkernel.norm * h⁻¹^sphkernel.dim
-    t1 = 1 - u
-    t4 = t1 * t1 * t1 * t1
-    (t4 * (1 + 4u)) * sphn
+    list[2] # 1 4709
+    ind1 = findfirst(x-> (x[1] == 1 && x[2] == 4709) || (x[2] == 1 && x[1] == 4709), pairs) #
+    pair  = pairs[87, 1, 1] # 4709 1
+    pᵢ    = pair[1]; pⱼ = pair[2]; d = pair[3]
+    xᵢ    = cpupoints[pᵢ]
+    xⱼ    = cpupoints[pⱼ]
+    u     = d * H⁻¹
+    dwk_r = d𝒲(sphkernel, u, H⁻¹) / d
+    ∇w    = ((xᵢ[1] - xⱼ[1]) * dwk_r, (xᵢ[2] - xⱼ[2]) * dwk_r)
+    ∇Wₙ[34, 1, 1]
+    WgL[1]
 
 
-
-    #CUDA.@device_code_typed GPUCellListSPH.∑ⱼWᵢⱼ!(sumW, cellcounter, pairs, sphkernel, h⁻¹)
-
-    @benchmark  GPUCellListSPH.∑W_2d!($copy(sumW), $cellcounter, $pairs, $sphkernel, $h⁻¹)
-
-    @benchmark GPUCellListSPH.∑∇W_2d!($copy(sum∇W), $∇Wₙ, $cellcounter, $pairs, $points, $sphkernel, $h⁻¹) 
-
-
-    dx  = 0.02
-    H   = 1.2 * sqrt(2) * dx
-    h   = H/2
-    h⁻¹ = 1/h
-    dist = 2H
-    system = GPUCellListSPH.GPUCellList(cpupoints, (H, H), H)
-    GPUCellListSPH.update!(system)
-
-    @benchmark GPUCellListSPH.update!($system)
-    @benchmark GPUCellListSPH.partialupdate!($system)
-
-    #=
-    using SPHKernels
-    sphk     = WendlandC6(Float64, 3)
-    r     = 0.5
-    h     = 1.0
-    h_inv = 1.0 / h
-    u     = r * h_inv
-    val = 𝒲(sphk, u, h_inv)
-    d𝒲(sphk, u, h_inv)
-
-    SPHKernels.∇𝒲
-    =#
-
-    using SPHKernels, StaticArrays
-    sphk     = WendlandC2(Float64, 2)
-    r     = 0.5
-    h     = 1.0
-    h_inv = 1.0 / h
-    u     = r * h_inv
-    val = 𝒲(sphk, u, h_inv)
-
-    Δx    = SVector((0.1,0.1,0.1))
-    ∇𝒲(sphk, r, h⁻¹, Δx)
+    list[20] # 4705 4713
+    ind1 = findfirst(x-> (x[1] == 4705 && x[2] == 4713) || (x[2] == 4713 && x[1] == 4705), pairs) #
+    pair  = pairs[4, 1, 1] # 4705 4713
+    pᵢ    = pair[1]; pⱼ = pair[2]; d = pair[3]
+    xᵢ    = cpupoints[pᵢ]
+    xⱼ    = cpupoints[pⱼ]
+    u     = d * H⁻¹
+    dwk_r = d𝒲(sphkernel, u, H⁻¹) / d
+    ∇w    = ((xᵢ[1] - xⱼ[1]) * dwk_r, (xᵢ[2] - xⱼ[2]) * dwk_r)
+    ∇Wₙ[4, 1, 1]
+    WgL[20]
 
 
-    val = 𝒲(sphk, u, h_inv)
-
-    d𝒲(sphk, u, h_inv)
-
-    ∇𝒲(sphk, r, h⁻¹, Δx)
-
-function sdf(list, pairs)
-    inds = Int[]
-    for i = 1:length(list)
-        el1 = findfirst(x-> x[1] == list[i][1] && x[2] == list[i][2], pairs)
-        el2 = findfirst(x-> x[2] == list[i][1] && x[1] == list[i][2], pairs)
-        if isnothing(el1) && isnothing(el2) push!(inds, i) end
-    end
-    inds
-end
-sdfinds = sdf(list, Array(pairs))
-
-
-function btpn(cpupoints, dist)
-    n = 0
-    for i = 1:length(cpupoints)-1
-        for j = i+1:length(cpupoints)
-            if sqrt((cpupoints[i][1] -  cpupoints[j][1])^2 + (cpupoints[i][2] -  cpupoints[j][2])^2) < dist 
-                n += 1 
+    function collctgrad(sum∇W, ∇Wₙ, pairs)
+        pairs = collect(pairs)
+        ∇Wₙ = collect(∇Wₙ)
+        sum∇W = zeros(Float64, N, 2)
+        for (k, v) in enumerate(∇Wₙ)
+            p1, p2, d = pairs[k]
+            if p1 > 0 && p2 > 0
+                gr        = ∇Wₙ[k]
+                sum∇W[p1, 1] += gr[1]
+                sum∇W[p1, 2] += gr[2]
+                sum∇W[p2, 1] -= gr[1]
+                sum∇W[p2, 2] -= gr[2]
             end
         end
+        sum∇W
     end
-    n
-end
-btpn(cpupoints, dist)
-
-
-
-
-    d  = 0.2
-    H  = 0.3
-    αD  = (7/(4 * π * H^2)) 
-    SPHExample.Wᵢⱼ(αD, d/2H) 
-
-
-    using SPHKernels
-    sphkernel    = WendlandC2(Float64, 2)
-    𝒲(sphkernel, d/2H, 1/2H)
-
-
-    using SPHKernels
-    function Wᵢⱼ(αD, q)
-        return αD * (1 - q) ^ 4 * (1 + 4q)
-    end
-    d    = 0.2
-    H    = 0.3
-    αD  = (7/(4 * π * H^2)) 
-    w1 =  Wᵢⱼ(αD, d/2H) 
-    sphkernel    = WendlandC2(Float64, 2)
-    w2 =   𝒲(sphkernel, d/2H, 1/2H)
-    w1 ≈ w2
-
+    res = collctgrad(sum∇W, ∇Wₙ, pairs)

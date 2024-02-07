@@ -1,12 +1,18 @@
 mutable struct SPHProblem
+    dim
     h
     h⁻¹
     H
+    H⁻¹
     kernel
-    sumW
-
-    function SPHProblem(h, H, kernel, sumW)
-        new{}(h, 1/h⁻¹, H, kernel, sumW)
+    ∑W
+    ∑∇W
+    ∇Wₙ
+    ∑∂Π∂t
+    ∑∂v∂t
+    ∑∂ρ∂t
+    function SPHProblem(dim, h, H, kernel, ∑W, ∑∇W, ∇Wₙ, ∑∂Π∂t, ∑∂v∂t, ∑∂ρ∂t)
+        new{}(dim, h, 1/h, H, 1/H, kernel, ∑W, ∑∇W, ∇Wₙ, ∑∂Π∂t, ∑∂v∂t, ∑∂ρ∂t)
     end
 end
 
