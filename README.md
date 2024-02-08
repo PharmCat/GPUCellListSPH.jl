@@ -15,16 +15,15 @@ Pkg.add(url = "https://github.com/PharmCat/GPUCellListSPH.jl.git")
 ## Using 
 
 ```julia
-using CUDA, BenchmarkTools
+using BenchmarkTools, GPUCellListSPH, CUDA
 
-cpupoints = map(x->tuple(x...), eachrow(rand(Float64, 200000, 3)))
-
+cpupoints = map(x->tuple(x...), eachrow(rand(Float64, 200000, 2)))
 
 system = GPUCellListSPH.GPUCellList(cpupoints, (0.016, 0.016), 0.016)
 
 system.points # points
 
-system.pairs # pairs for each cell
+system.pairs # pairs list
 
 system.grid # cell grid 
 
@@ -32,15 +31,14 @@ sum(system.cellpnum) # total cell number
 
 maximum(system.cellpnum) # maximum particle in cell
 
-maximum(system.cellcounter) # maximum pairs in cell
+count(x-> !isnan(x[3]), system.pairs)  == system.pairsn
 
-count(x-> !isnan(x[3]), system.pairs) == sum(system.cellcounter)
 
-GPUCellListSPH.update!(system) # update the system
+GPUCellListSPH.update!(system)
 
-count(x-> !isnan(x[3]), system.pairs) == sum(system.cellcounter)
+GPUCellListSPH.partialupdate!(system)
 
-@benchmark GPUCellListSPH.update!($system)
+count(x-> !isnan(x[3]), system.pairs) == system.pairsn
 ```
 
 ## Benchmark
@@ -48,31 +46,31 @@ count(x-> !isnan(x[3]), system.pairs) == sum(system.cellcounter)
 ```julia
 @benchmark GPUCellListSPH.update!($system)
 
-BenchmarkTools.Trial: 120 samples with 1 evaluation.
- Range (min … max):  40.410 ms …  43.864 ms  ┊ GC (min … max): 0.00% … 0.00%
- Time  (median):     41.954 ms               ┊ GC (median):    0.00%
- Time  (mean ± σ):   41.970 ms ± 739.440 μs  ┊ GC (mean ± σ):  0.00% ± 0.00%
+BenchmarkTools.Trial: 117 samples with 1 evaluation.
+ Range (min … max):  42.519 ms …  43.666 ms  ┊ GC (min … max): 0.00% … 0.00%
+ Time  (median):     42.998 ms               ┊ GC (median):    0.00%        
+ Time  (mean ± σ):   42.987 ms ± 230.596 μs  ┊ GC (mean ± σ):  0.00% ± 0.00%
 
-  ▁                ██▃▁ ▃  ▁     █▁▃   ▃  ▃    ▃
-  █▄▄▆▁▄▁▄▁▄▁▁▆▄▁▇▆████▄█▄▆█▆▇▄▁▇███▆▇▆█▇▆█▁▁▄▆█▄▄▄▄▁▁▁▁▁▁▁▁▄▄ ▄
-  40.4 ms         Histogram: frequency by time         43.8 ms <
+             ▃     ▃▁  ▁ ▁   ▁ █ ▃▁▃  ▁
+  ▇▄▁▁▄▁▆▄▄▁▆█▄▁▆▇▇██▄▇█▆█▇▆▁█▇█▇███▇▆█▄▇▁▆▁▆▁▄▁▆▁▆▆▁▇▁▁▄▁▄▁▄▄ ▄
+  42.5 ms         Histogram: frequency by time         43.5 ms <
 
- Memory estimate: 33.23 KiB, allocs estimate: 515.
+ Memory estimate: 40.72 KiB, allocs estimate: 722.
 ```
 
 ```julia
 @benchmark GPUCellListSPH.partialupdate!($system)
 
-BenchmarkTools.Trial: 122 samples with 1 evaluation.
- Range (min … max):  40.010 ms …  42.587 ms  ┊ GC (min … max): 0.00% … 0.00%
- Time  (median):     41.097 ms               ┊ GC (median):    0.00%
- Time  (mean ± σ):   41.185 ms ± 491.277 μs  ┊ GC (mean ± σ):  0.00% ± 0.00%
+BenchmarkTools.Trial: 118 samples with 1 evaluation.
+ Range (min … max):  42.290 ms …  43.137 ms  ┊ GC (min … max): 0.00% … 0.00%
+ Time  (median):     42.673 ms               ┊ GC (median):    0.00%        
+ Time  (mean ± σ):   42.672 ms ± 167.919 μs  ┊ GC (mean ± σ):  0.00% ± 0.00%
 
-                      ▄▇█▁▁▇▄▅▁▂
-  ▃▁▃▃▁▃▁▃▃▁▃▁▆▃▁▁▁▃█▅██████████▃▅▃▃▆▁▃▃▃▆▃▃▁▃▃▃▅▆▅▃▃▃▃▁▁▁▃▁▁▃ ▃
-  40 ms           Histogram: frequency by time         42.5 ms <
+                     ▁  ▃  ▄ ▁▆ ▁▁█  ▆▁     ▃
+  ▆▆▁▁▁▄▆▁▁▆▇▁▆▁▇▁▆▇▇█▆▄█▁▇█▆██▇███▆▆██▁▆▄▆▄█▆▁▁▄▄▄▇▆▆▁▁▁▁▁▁▁▄ ▄
+  42.3 ms         Histogram: frequency by time         43.1 ms <
 
- Memory estimate: 25.39 KiB, allocs estimate: 400.
+ Memory estimate: 30.70 KiB, allocs estimate: 509.
 ```
 
 ## Acknowledgment

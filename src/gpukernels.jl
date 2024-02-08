@@ -2,39 +2,40 @@
 # CELL LIST
 #####################################################################
 
-"""
-    Map each point to cell.
-"""
-function kernel_cellmap_2d!(pcell, points,  h, offset) 
+function kernel_cellmap_2d!(pcell, points,  h⁻¹, offset) 
     i = threadIdx().x + (blockIdx().x - 1) * blockDim().x
     if i <= length(points)
-        @fastmath  p₁ =  (points[i][1] - offset[1]) / h[1]
-        @fastmath  p₂ =  (points[i][2] - offset[2]) / h[2]
+        @fastmath  p₁ =  (points[i][1] - offset[1]) * h⁻¹[1]
+        @fastmath  p₂ =  (points[i][2] - offset[2]) * h⁻¹[2]
         pᵢ₁ = ceil(Int32, p₁)
         pᵢ₂ = ceil(Int32, p₂)
         @inbounds pcell[i] = (pᵢ₁, pᵢ₂) # what to with points outside cell grid?
     end
     return nothing
 end
+"""
+    cellmap_2d!(pcell, points, dist, offset) 
+    
+Map each point to cell.
+"""
 function cellmap_2d!(pcell, points, h, offset) 
-    kernel = @cuda launch=false kernel_cellmap_2d!(pcell, points,  h, offset) 
+    h⁻¹ = (1/h[1], 1/h[2])
+    kernel = @cuda launch=false kernel_cellmap_2d!(pcell, points,  h⁻¹, offset) 
     config = launch_configuration(kernel.fun)
     threads = min(size(points, 1), config.threads)
     blocks = cld(size(points, 1), threads)
-    CUDA.@sync kernel(pcell, points,  h, offset; threads = threads, blocks = blocks)
+    CUDA.@sync kernel(pcell, points,  h⁻¹, offset; threads = threads, blocks = blocks)
 end
 
+#####################################################################
 
-"""
-    Number of points in each cell.
-"""
-function kernel_cellpnum_2d!(cellpnum, points,  h, offset) 
+function kernel_cellpnum_2d!(cellpnum, points,  h⁻¹, offset) 
     i = threadIdx().x + (blockIdx().x - 1) * blockDim().x
     csᵢ = size(cellpnum, 1) 
     csⱼ = size(cellpnum, 2) 
     if i <= length(points)
-        @fastmath  p₁ =  (points[i][1] - offset[1]) / h[1]
-        @fastmath  p₂ =  (points[i][2] - offset[2]) / h[2]
+        @fastmath  p₁ =  (points[i][1] - offset[1]) * h⁻¹[1]
+        @fastmath  p₂ =  (points[i][2] - offset[2]) * h⁻¹[2]
         pᵢ₁ = ceil(Int32, p₁) 
         pᵢ₂ = ceil(Int32, p₂)
         if csᵢ >= pᵢ₁ > 0 && csⱼ >= pᵢ₂ > 0
@@ -43,17 +44,21 @@ function kernel_cellpnum_2d!(cellpnum, points,  h, offset)
     end
     return nothing
 end
+"""
+    Number of points in each cell.
+"""
 function cellpnum_2d!(cellpnum, points,  h, offset)  
-    kernel = @cuda launch=false kernel_cellpnum_2d!(cellpnum, points,  h, offset) 
+    h⁻¹ = (1/h[1], 1/h[2])
+    kernel = @cuda launch=false kernel_cellpnum_2d!(cellpnum, points,  h⁻¹, offset) 
     config = launch_configuration(kernel.fun)
     threads = min(size(points, 1), config.threads)
     blocks = cld(size(points, 1), threads)
-    CUDA.@sync kernel(cellpnum, points,  h, offset; threads = threads, blocks = blocks)
+    CUDA.@sync kernel(cellpnum, points,  h⁻¹, offset; threads = threads, blocks = blocks)
 end
 
-"""
-    Fill cell list with cell. Naive approach.
-"""
+#####################################################################
+
+
 function kernel_fillcells_naive_2d!(celllist, cellpnum, pcell) 
     indexᵢ = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
     if indexᵢ <= length(pcell) 
@@ -63,6 +68,11 @@ function kernel_fillcells_naive_2d!(celllist, cellpnum, pcell)
     end
     return nothing
 end
+"""
+    fillcells_naive_2d!(celllist, cellpnum, pcell) 
+    
+Fill cell list with cell. Naive approach.
+"""
 function fillcells_naive_2d!(celllist, cellpnum, pcell)  
     kernel = @cuda launch=false kernel_fillcells_naive_2d!(celllist, cellpnum, pcell) 
     config = launch_configuration(kernel.fun)
@@ -71,7 +81,9 @@ function fillcells_naive_2d!(celllist, cellpnum, pcell)
     CUDA.@sync kernel(celllist, cellpnum, pcell; threads = threads, blocks = blocks)
 end
 
+#####################################################################
 
+#=
 """
     Fill cell list with cell. Each cell iterate over pcell vector.
 """
@@ -101,7 +113,9 @@ function fillcells_cspwn_2d!(celllist, cellcounter,  pcell)
     blocks = cld(size(celllist, 1), threads)
     CUDA.@sync kernel(celllist, cellcounter,  pcell; threads = (threads,threads), blocks = (blocks,blocks))
 end
-
+=#
+#####################################################################
+#=
 """
 Fill cell list with cell. Each thread find starting point in sorted array 
 and iterate only in region for first dimension of cell grid. 
@@ -136,10 +150,105 @@ function fillcells_psort_2d!(celllist, cellpnum, pvec, pcell)
     sortperm!(pvec, pcell; by=first)
     cellthreadmap_2d!(celllist, cellpnum, pvec, pcell) 
 end
+=#
+#####################################################################
 
+function kernel_мaxpairs_2d!(cellpnum, cnt)
+    indexᵢ = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
+    indexⱼ = (blockIdx().y - Int32(1)) * blockDim().y + threadIdx().y 
+    Nx, Ny = size(cellpnum)
+    if  indexᵢ <= Nx && indexⱼ <= Ny 
+        n = cellpnum[indexᵢ, indexⱼ] 
+        if n > 0
+            m         = 0
+            neibcellᵢ = indexᵢ - 1
+            neibcellⱼ = indexⱼ + 1
+            if  0 < neibcellᵢ <= Nx && 0 < neibcellⱼ <= Ny 
+                m += cellpnum[neibcellᵢ, neibcellⱼ] 
+            end
+            neibcellᵢ = indexᵢ 
+            neibcellⱼ = indexⱼ + 1
+            if 0 < neibcellᵢ <= Nx && 0 < neibcellⱼ <= Ny 
+                m += cellpnum[neibcellᵢ, neibcellⱼ] 
+            end
+            neibcellᵢ = indexᵢ + 1
+            neibcellⱼ = indexⱼ + 1
+            if 0 < neibcellᵢ <= Nx && 0 < neibcellⱼ <= Ny 
+                m += cellpnum[neibcellᵢ, neibcellⱼ] 
+            end
+            neibcellᵢ = indexᵢ + 1
+            neibcellⱼ = indexⱼ 
+            if 0 < neibcellᵢ <= Nx && 0 < neibcellⱼ <= Ny 
+                m += cellpnum[neibcellᵢ, neibcellⱼ] 
+            end
+            val  = Int((n * (n - 1)) * 0.5) + m * n
+            CUDA.@atomic cnt[1] += val
+        end
+    end
+    return nothing
+end
 """
-    Find all pairs with distance < h
+    мaxpairs_2d(cellpnum)
+
+Maximum number of pairs.
 """
+function мaxpairs_2d(cellpnum)
+    cnt        = CUDA.zeros(Int, 1)
+    Nx, Ny     = size(cellpnum)
+    gpukernel  = @cuda launch=false kernel_мaxpairs_2d!(cellpnum, cnt)
+    config     = launch_configuration(gpukernel.fun)
+    maxThreads = config.threads
+    Tx         = min(maxThreads, Nx)
+    Ty         = min(fld(maxThreads, Tx), Ny)
+    Bx, By     = cld(Nx, Tx), cld(Ny, Ty) 
+    threads    = (Tx, Ty)
+    blocks     = (Bx, By)
+    CUDA.@sync gpukernel(cellpnum, cnt; threads = threads, blocks = blocks)
+    CUDA.@allowscalar cnt[1]
+end
+#####################################################################
+
+function kernel_neib_internal_2d!(pairs, cnt, cellpnum, points, celllist, dist) 
+    indexᵢ = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
+    indexⱼ = (blockIdx().y - Int32(1)) * blockDim().y + threadIdx().y
+    #indexₖ = (blockIdx().z - Int32(1)) * blockDim().z + threadIdx().z
+    if indexᵢ <= size(celllist, 1) && indexⱼ <= size(celllist, 2) && cellpnum[indexᵢ, indexⱼ] > 1 
+        @inbounds len = cellpnum[indexᵢ, indexⱼ]
+        for i = 1:len - 1
+            @inbounds indi = celllist[indexᵢ, indexⱼ, i]
+            for j = i + 1:len
+                @inbounds indj = celllist[indexᵢ, indexⱼ, j]
+                @inbounds distance = sqrt((points[indi][1] - points[indj][1])^2 + (points[indi][2] - points[indj][2])^2)
+                if distance < dist
+                    n = CUDA.@atomic cnt[1] += 1
+                    if n <= size(pairs, 1)
+                        @inbounds  pairs[n + 1] = tuple(indi, indj, distance)
+                    end
+                end
+            end
+        end
+    end
+    return nothing
+end
+"""
+    neib_internal_2d!(pairs, cnt, cellpnum, points, celllist, dist)
+
+Find all pairs with distance < h in one cell.
+"""
+function neib_internal_2d!(pairs, cnt, cellpnum, points, celllist, dist)
+    gpukernel = @cuda launch=false kernel_neib_internal_2d!(pairs, cnt, cellpnum, points, celllist, dist)
+    config = launch_configuration(gpukernel.fun)
+    Nx, Ny = size(cellpnum)
+    maxThreads = config.threads
+    Tx  = min(maxThreads, Nx)
+    Ty  = min(fld(maxThreads, Tx), Ny)
+    Bx, By = cld(Nx, Tx), cld(Ny, Ty)  # Blocks in grid.
+    threads = (Tx, Ty)
+    blocks  = Bx, By
+    CUDA.@sync gpukernel(pairs, cnt, cellpnum, points, celllist, dist; threads = threads, blocks = blocks)
+end
+#####################################################################
+#=
 function kernel_neib_internal_2d!(pairs, cellcounter, cellpnum, celllist, points, h) 
     indexᵢ = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
     indexⱼ = (blockIdx().y - Int32(1)) * blockDim().y + threadIdx().y
@@ -175,10 +284,51 @@ function neib_internal_2d!(pairs, cellcounter, cellpnum, celllist, points, h)
     blocks = (cld(size(celllist, 1), threads[1]), cld(size(celllist, 2), threads[2]))
     CUDA.@sync kernel(pairs, cellcounter, cellpnum, celllist, points, h, pairs; threads = threads, blocks = blocks)
 end
+=#
+
+function kernel_neib_external_2d!(pairs, cnt, cellpnum, points, celllist,  offset, dist)
+    indexᵢ = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
+    indexⱼ = (blockIdx().y - Int32(1)) * blockDim().y + threadIdx().y 
+    Nx, Ny = size(cellpnum)
+    neibcellᵢ = indexᵢ + offset[1]
+    neibcellⱼ = indexⱼ + offset[2]
+    if 0 < neibcellᵢ <= Nx &&  0 < neibcellⱼ <= Ny && indexᵢ <= Nx && indexⱼ <= Ny && cellpnum[indexᵢ, indexⱼ] > 0 #&& cellpnum[neibcellᵢ, neibcellⱼ] > 0
+        iinds = view(celllist, indexᵢ, indexⱼ, 1:cellpnum[indexᵢ, indexⱼ])
+        jinds = view(celllist, neibcellᵢ, neibcellⱼ, 1:cellpnum[neibcellᵢ, neibcellⱼ])
+        for i in iinds
+            for j in jinds
+                @inbounds  distance = sqrt((points[i][1] - points[j][1])^2 + (points[i][2] - points[j][2])^2)
+                if distance < dist
+                    n = CUDA.@atomic cnt[1] += 1
+                    if n <= size(pairs, 1)
+                        @inbounds pairs[n + 1] = tuple(i, j, distance)
+                    end
+                end
+            end  
+        end
+    end
+    return nothing
+end
 
 """
-    Find all pairs with another cell shifted on offset.
+    neib_external_2d!(pairs, cnt, cellpnum, points, celllist, offset, dist)
+
+Find all pairs with another cell shifted on offset.
 """
+function neib_external_2d!(pairs, cnt, cellpnum, points, celllist, offset, dist)
+    gpukernel = @cuda launch=false kernel_neib_external_2d!(pairs, cnt, cellpnum, points, celllist,  offset, dist)
+    config = launch_configuration(gpukernel.fun)
+    Nx, Ny = size(cellpnum)
+    maxThreads = config.threads
+    Tx  = min(maxThreads, Nx)
+    Ty  = min(fld(maxThreads, Tx), Ny)
+    Bx, By = cld(Nx, Tx), cld(Ny, Ty)  # Blocks in grid.
+    threads = (Tx, Ty)
+    blocks  = Bx, By
+    CUDA.@sync gpukernel(pairs, cnt, cellpnum, points, celllist, offset, dist; threads = threads, blocks = blocks)
+end
+#####################################################################
+#=
 function kernel_neib_external_2d!(pairs, cellcounter, cellpnum, points, celllist,  offset, h)
     indexᵢ = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
     indexⱼ = (blockIdx().y - Int32(1)) * blockDim().y + threadIdx().y 
@@ -190,13 +340,13 @@ function kernel_neib_external_2d!(pairs, cellcounter, cellpnum, points, celllist
         jinds = view(celllist, neibcellᵢ, neibcellⱼ, 1:cellpnum[neibcellᵢ, neibcellⱼ])
         for i in iinds
                 for j in jinds
-                        @inbounds  distance = sqrt((points[i][1] - points[j][1])^2 + (points[i][2] - points[j][2])^2)
-                        if distance < h
-                            n += 1
-                            if n <= size(pairs, 1)
-                                @inbounds pairs[n,  indexᵢ, indexⱼ] = tuple(i, j, distance)
-                            end
+                    @inbounds  distance = sqrt((points[i][1] - points[j][1])^2 + (points[i][2] - points[j][2])^2)
+                    if distance < h
+                        n += 1
+                        if n <= size(pairs, 1)
+                            @inbounds pairs[n,  indexᵢ, indexⱼ] = tuple(i, j, distance)
                         end
+                    end
                 end  
         end
         cellcounter[indexᵢ, indexⱼ] = n
@@ -210,16 +360,11 @@ function neib_external_2d!(pairs, cellcounter, cellpnum, points, celllist,  offs
     blocks = (cld(size(celllist, 1), threads[1]), cld(size(celllist, 2), threads[2]))
     CUDA.@sync kernel(pairs, cellcounter, cellpnum, points, celllist,  offset, h; threads = threads, blocks = blocks)
 end
-
+=#
 #####################################################################
 # SPH
 #####################################################################
 
-"""
-    ∑W_2d!
-
-
-"""
 function kernel_∑W_2d!(sumW, cellcounter, pairs, sphkernel, H⁻¹) 
     indexᵢ = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
     indexⱼ = (blockIdx().y - Int32(1)) * blockDim().y + threadIdx().y 
@@ -235,6 +380,12 @@ function kernel_∑W_2d!(sumW, cellcounter, pairs, sphkernel, H⁻¹)
     end
     return nothing
 end
+"""
+
+
+∑W_2d!
+
+"""
 function ∑W_2d!(sumW, cellcounter, pairs, sphkernel, H⁻¹) 
     gpukernel = @cuda launch=false kernel_∑W_2d!(sumW, cellcounter, pairs, sphkernel, H⁻¹) 
     #config = launch_configuration(gpukernel.fun)
@@ -247,7 +398,7 @@ function ∑W_2d!(sumW, cellcounter, pairs, sphkernel, H⁻¹)
     blocks  = Bx, By
     CUDA.@sync gpukernel(sumW, cellcounter, pairs, sphkernel, H⁻¹; threads = threads, blocks = blocks)
 end
-
+#####################################################################
 
 function ∇Wfunc(αD, q, h) 
     if 0 < q < 2
@@ -255,12 +406,8 @@ function ∇Wfunc(αD, q, h)
     end
     return 0.0
 end
+#####################################################################
 
-"""
-    ∑∇W_2d!
-
-
-"""
 function kernel_∑∇W_2d!(sum∇W, ∇Wₙ, cellcounter, pairs, points, kernel, H⁻¹) 
     indexᵢ = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
     indexⱼ = (blockIdx().y - Int32(1)) * blockDim().y + threadIdx().y 
@@ -297,6 +444,11 @@ function kernel_∑∇W_2d!(sum∇W, ∇Wₙ, cellcounter, pairs, points, kernel
     end
     return nothing
 end
+"""
+    
+    ∑∇W_2d!
+
+"""
 function ∑∇W_2d!(sum∇W, ∇Wₙ, cellcounter, pairs, points, kernel, H⁻¹) 
     gpukernel = @cuda launch=false kernel_∑∇W_2d!(sum∇W, ∇Wₙ, cellcounter, pairs, points, kernel, H⁻¹) 
     #config = launch_configuration(gpukernel.fun)
@@ -309,14 +461,76 @@ function ∑∇W_2d!(sum∇W, ∇Wₙ, cellcounter, pairs, points, kernel, H⁻�
     blocks  = Bx, By
     CUDA.@sync gpukernel(sum∇W, ∇Wₙ, cellcounter, pairs, points, kernel, H⁻¹; threads = threads, blocks = blocks)
 end
+#####################################################################
 
 
+function kernel_∑∇W_l_2d!(sum∇W, ∇Wₙ, cellcounter, pairs, points, kernel, H⁻¹, cnt) 
+    index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
 
-"""
-    ∂ρ∂tDDT!
+    if index <= length(pairs)
+            pair  = pairs[index]
+            pᵢ    = pair[1]; pⱼ = pair[2]; d = pair[3]
+            if !isnan(d)
+                xᵢ    = points[pᵢ]
+                xⱼ    = points[pⱼ]
+                u     = d * H⁻¹
+                dwk_r = d𝒲(kernel, u, H⁻¹) / d
+                ∇w    = ((xᵢ[1] - xⱼ[1]) * dwk_r, (xᵢ[2] - xⱼ[2]) * dwk_r)
+            
+                CUDA.@atomic sum∇W[pᵢ, 1] += ∇w[1]
+                CUDA.@atomic sum∇W[pᵢ, 2] += ∇w[2]
+                CUDA.@atomic sum∇W[pⱼ, 1] -= ∇w[1]
+                CUDA.@atomic sum∇W[pⱼ, 2] -= ∇w[2]
+                n = CUDA.@atomic cnt[1]   += 1
+                ∇Wₙ[n + 1] = ∇w
+            end
+    end
+    return nothing
+end
+function ∑∇W_l_2d!(sum∇W, ∇Wₙ, cellcounter, pairs, points, kernel, H⁻¹) 
+    cnt = CUDA.zeros(Int, 1)
+    gpukernel = @cuda launch=false kernel_∑∇W_l_2d!(sum∇W, ∇Wₙ, cellcounter, pairs, points, kernel, H⁻¹, cnt) 
+    #config = launch_configuration(gpukernel.fun)
+    Nx = length(pairs)
+    maxThreads = 1024
+    Tx  = min(maxThreads, Nx)
+    Bx = cld(Nx, Tx)
+    CUDA.@sync gpukernel(sum∇W, ∇Wₙ, cellcounter, pairs, points, kernel, H⁻¹, cnt; threads = Tx, blocks = Bx)
+    #return @allowscalar cnt[1]
+end
+#####################################################################
+function kernel_∑∇W_l2_2d!(sum∇W, ∇Wₙ, pairs, points, kernel, H⁻¹) 
+    index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
+    if index <= length(pairs)
+        pair  = pairs[index]
+        pᵢ    = pair[1]; pⱼ = pair[2]; d = pair[3]
+        if !isnan(d)
+            xᵢ    = points[pᵢ]
+            xⱼ    = points[pⱼ]
+            u     = d * H⁻¹
+            dwk_r = d𝒲(kernel, u, H⁻¹) / d
+            ∇w    = ((xᵢ[1] - xⱼ[1]) * dwk_r, (xᵢ[2] - xⱼ[2]) * dwk_r)
+            CUDA.@atomic sum∇W[pᵢ, 1] += ∇w[1]
+            CUDA.@atomic sum∇W[pᵢ, 2] += ∇w[2]
+            CUDA.@atomic sum∇W[pⱼ, 1] -= ∇w[1]
+            CUDA.@atomic sum∇W[pⱼ, 2] -= ∇w[2]
+            ∇Wₙ[index] = ∇w
+        end
+    end
+    return nothing
+end
+function ∑∇W_l2_2d!(sum∇W, ∇Wₙ, pairs, points, kernel, H⁻¹) 
+    gpukernel = @cuda launch=false kernel_∑∇W_l2_2d!(sum∇W, ∇Wₙ, pairs, points, kernel, H⁻¹) 
+    config = launch_configuration(gpukernel.fun)
+    Nx = length(pairs)
+    maxThreads = config.threads
+    Tx  = min(maxThreads, Nx)
+    Bx = cld(Nx, Tx)
+    CUDA.@sync gpukernel(sum∇W, ∇Wₙ, pairs, points, kernel, H⁻¹; threads = Tx, blocks = Bx)
+end
 
+#####################################################################
 
-"""
 function kernel_∂ρ∂tDDT!(∑∂ρ∂t,  ∇Wₙ, cellcounter, pairs, points, h, m₀, δᵩ, c₀, γ, g, ρ₀, ρ, v, MotionLimiter) 
     indexᵢ = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
     indexⱼ = (blockIdx().y - Int32(1)) * blockDim().y + threadIdx().y 
@@ -376,6 +590,12 @@ function kernel_∂ρ∂tDDT!(∑∂ρ∂t,  ∇Wₙ, cellcounter, pairs, points
     end
     return nothing
 end
+"""
+    
+    ∂ρ∂tDDT!
+
+
+"""
 function ∂ρ∂tDDT!(∑∂ρ∂t,  ∇Wₙ, cellcounter, pairs, points, h, m₀, δᵩ, c₀, γ, g, ρ₀, ρ, v, MotionLimiter) 
     gpukernel = @cuda launch=false kernel_∂ρ∂tDDT!(∑∂ρ∂t,  ∇Wₙ, cellcounter, pairs, points, h, m₀, δᵩ, c₀, γ, g, ρ₀, ρ, v, MotionLimiter) 
     config = launch_configuration(gpukernel.fun)
@@ -388,14 +608,8 @@ function ∂ρ∂tDDT!(∑∂ρ∂t,  ∇Wₙ, cellcounter, pairs, points, h, m�
     blocks  = Bx, By
     CUDA.@sync gpukernel(∑∂ρ∂t,  ∇Wₙ, cellcounter, pairs, points, h, m₀, δᵩ, c₀, γ, g, ρ₀, ρ, v, MotionLimiter; threads = threads, blocks = blocks)
 end
+#####################################################################
 
-
-
-"""
-    ∂Π∂t!
-
-
-"""
 function kernel_∂Π∂t!(∑∂Π∂t, ∇Wₙ, cellcounter, pairs, points, h, ρ, α, v, c₀, m₀) 
     indexᵢ = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
     indexⱼ = (blockIdx().y - Int32(1)) * blockDim().y + threadIdx().y 
@@ -438,6 +652,11 @@ function kernel_∂Π∂t!(∑∂Π∂t, ∇Wₙ, cellcounter, pairs, points, h,
     end
     return nothing
 end
+"""
+    
+    ∂Π∂t!
+
+"""
 function ∂Π∂t!(∑∂Π∂t, ∇Wₙ, cellcounter, pairs, points, h, ρ, α, v, c₀, m₀) 
     gpukernel = @cuda launch=false kernel_∂Π∂t!(∑∂Π∂t, ∇Wₙ, cellcounter, pairs, points, h, ρ, α, v, c₀, m₀) 
     config = launch_configuration(gpukernel.fun)
@@ -450,19 +669,15 @@ function ∂Π∂t!(∑∂Π∂t, ∇Wₙ, cellcounter, pairs, points, h, ρ, α
     blocks  = Bx, By
     CUDA.@sync gpukernel(∑∂Π∂t, ∇Wₙ, cellcounter, pairs, points, h, ρ, α, v, c₀, m₀; threads = threads, blocks = blocks)
 end
-
+#####################################################################
 
 
 
 function pressure(ρ, c₀, γ, ρ₀)
     return ((c₀ ^ 2 * ρ₀) / γ) * ((ρ / ρ₀) ^ γ - 1)
 end
+#####################################################################
 
-"""
-    ∂v∂t!
-
-
-"""
 function kernel_∂v∂t!(∑∂v∂t,  ∇Wₙ, cellcounter, pairs, points, m, ρ, c₀, γ, ρ₀) 
     indexᵢ = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
     indexⱼ = (blockIdx().y - Int32(1)) * blockDim().y + threadIdx().y 
@@ -492,6 +707,12 @@ function kernel_∂v∂t!(∑∂v∂t,  ∇Wₙ, cellcounter, pairs, points, m, 
     end
     return nothing
 end
+"""
+    
+    ∂v∂t!
+
+
+"""
 function ∂v∂t!(∑∂v∂t,  ∇Wₙ, cellcounter, pairs, points, m, ρ, c₀, γ, ρ₀) 
     gpukernel = @cuda launch=false kernel_∂v∂t!(∑∂v∂t,  ∇Wₙ, cellcounter, pairs, points, m, ρ, c₀, γ, ρ₀) 
     config = launch_configuration(gpukernel.fun)
@@ -504,4 +725,4 @@ function ∂v∂t!(∑∂v∂t,  ∇Wₙ, cellcounter, pairs, points, m, ρ, c�
     blocks  = Bx, By
     CUDA.@sync gpukernel(∑∂v∂t,  ∇Wₙ, cellcounter, pairs, points, m, ρ, c₀, γ, ρ₀; threads = threads, blocks = blocks)
 end
-
+#####################################################################
