@@ -1,20 +1,24 @@
 mutable struct GPUCellList
     n::Int
-    dist
+    dist::Float64
     cs
     offset
     grid
-    points
-    pcell
-    pvec
-    cellpnum
-    cnt
-    celllist
-    pairs
-    pairsn
+    points::CuArray
+    pcell::CuArray
+    pvec::CuArray
+    cellpnum::CuArray
+    cnt::CuArray
+    celllist::CuArray
+    pairs::CuArray
+    pairsn::Int
 end
 
+"""
+    GPUCellList(points, cellsize, dist; mppcell = 0, mpairs = 0)
 
+Make cell list structure.
+"""
 function GPUCellList(points, cellsize, dist; mppcell = 0, mpairs = 0)
     el = first(points)
     if length(el) < 2 error("wrong dimention") end
