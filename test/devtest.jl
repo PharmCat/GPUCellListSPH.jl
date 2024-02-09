@@ -1,6 +1,9 @@
-using BenchmarkTools, GPUCellListSPH, CUDA
+using BenchmarkTools, GPUCellListSPH, CUDA, StaticArrays
+
 
 cpupoints = map(x->tuple(x...), eachrow(rand(Float64, 200000, 2)))
+
+cpupoints = map(x->SVector(tuple(x...)), eachrow(rand(Float64, 200000, 2)))
 
 system = GPUCellListSPH.GPUCellList(cpupoints, (0.016, 0.016), 0.016)
 
@@ -84,11 +87,13 @@ boundary_csv = joinpath(path, "./input/BoundaryPoints_Dp0.02.csv")
     ∑∂Π∂t   = CUDA.zeros(Float64, N, 2)
     ∑∂v∂t   = CUDA.zeros(Float64, N, 2)
 
+    buf     = CUDA.zeros(Float64, N)
+
 #== ==#
-function sph_simulation(system, sphkernel, ρ, ρΔt½, v, vΔt½, xΔt½, ∑∂Π∂t, ∑∂ρ∂t, ∑∂v∂t, sumW, sum∇W, ∇Wₙ, Δt, ρ₀, isboundary, ml, h, H⁻¹, m₀, δᵩ, c₀, γ, g, α)
+function sph_simulation(system, sphkernel, ρ, ρΔt½, v, vΔt½, xΔt½, ∑∂Π∂t, ∑∂ρ∂t, ∑∂v∂t, sumW, sum∇W, ∇Wₙ, Δt, ρ₀, isboundary, ml, h, H⁻¹, m₀, δᵩ, c₀, γ, g, α; simn = 1)
 
+    for iter = 1:simn
     GPUCellListSPH.update!(system)
-
     x     = system.points
     pairs = system.pairs
 
@@ -129,12 +134,16 @@ function sph_simulation(system, sphkernel, ρ, ρΔt½, v, vΔt½, xΔt½, ∑�
 
     GPUCellListSPH.completed_∂v∂t!(∑∂v∂t, ∑∂Π∂t,  (0.0, g), gf)
 
-    GPUCellListSPH.update_all!(ρ, ρΔt½, v, vΔt½, x, xΔt½, ∑∂ρ∂t, ∑∂v∂t,  Δt, ρ₀, isboundary, ml) 
-
+    GPUCellListSPH.update_all!(ρ, ρΔt½, v, vΔt½, x, xΔt½, ∑∂ρ∂t, ∑∂v∂t,  Δt, ρ₀, isboundary, ml)
+    
+    Δt = GPUCellListSPH.Δt_stepping(buf, ∑∂v∂t, v, x, c₀, h, CFL)
+    end
 end
     #CUDA.registers(@cuda GPUCellListSPH.kernel_∂ρ∂tDDT!(∑∂ρ∂t,  ∇Wₙ, cellcounter, pairs, gpupoints, h, m₀, δᵩ, c₀, γ, g, ρ₀, ρ, v, ml))
 
 
 sph_simulation(system, sphkernel, ρ, ρΔt½, v, vΔt½, xΔt½, ∑∂Π∂t, ∑∂ρ∂t, ∑∂v∂t, sumW, sum∇W, ∇Wₙ, Δt, ρ₀, isboundary, ml, h, H⁻¹, m₀, δᵩ, c₀, γ, g, α)
 
-@benchmark  sph_simulation($system, $sphkernel, $ρ, $ρΔt½, $v, $vΔt½, $xΔt½, $∑∂Π∂t, $∑∂ρ∂t, $∑∂v∂t, $sumW, $sum∇W, $∇Wₙ, $Δt, $ρ₀, $isboundary, $ml, $h, $H⁻¹, $m₀, $δᵩ, $c₀, $γ, $g, $α)
+@benchmark  sph_simulation($system, $sphkernel, $ρ, $ρΔt½, $v, $vΔt½, $xΔt½, $∑∂Π∂t, $∑∂ρ∂t, $∑∂v∂t, $sumW, $sum∇W, $∇Wₙ, $Δt, $ρ₀, $isboundary, $ml, $h, $H⁻¹, $m₀, $δᵩ, $c₀, $γ, $g, $α; simn = 100)
+
+

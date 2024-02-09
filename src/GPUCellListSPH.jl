@@ -2,7 +2,7 @@ module GPUCellListSPH
 
 import Base: show
 
-using CUDA, SPHKernels, CSV, DataFrames 
+using CUDA, SPHKernels, CSV, DataFrames
 
 export GPUCellList, update!, partialupdate!, neighborlist
 

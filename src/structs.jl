@@ -37,7 +37,7 @@ function GPUCellList(points, cellsize, dist; mppcell = 0, mpairs = 0)
     range1 = MAX1 - MIN1                                        # range 1-dim
     range2 = MAX2 - MIN2                                        # range 2-dim
     CELL1  = ceil(Int, range1/cs1)                              # number of cells 1-dim
-    CELL2  = ceil(Int, range1/cs2)                              # number of cells 2-dim
+    CELL2  = ceil(Int, range2/cs2)                              # number of cells 2-dim
 
     cellpnum     = CUDA.zeros(Int32, CELL1, CELL2)              # 2-dim array for number of particles in each cell 
     cnt          = CUDA.zeros(Int, 1)                           # temp array for particles counter 
@@ -79,6 +79,7 @@ function GPUCellList(points, cellsize, dist; mppcell = 0, mpairs = 0)
         new_pairn  = Int(ceil(total_pairs / 0.8))
         new_pairs  = CUDA.fill((zero(Int32), zero(Int32), NaN), new_pairn)
         copyto!(new_pairs, view(pairs, 1:new_pairn))
+        CUDA.unsafe_free!(pairs)
         pairs      = new_pairs
     end
     GPUCellList(N, dist, cellsize, (MIN1, MIN2), (CELL1, CELL2), points, pcell, pvec, cellpnum, cnt, celllist, pairs, total_pairs)
@@ -100,6 +101,7 @@ function update!(c::GPUCellList)
 
     if maxpoint > mppcell
         mppcell = Int(ceil(maxpoint*1.05 + 1)) 
+        CUDA.unsafe_free!(c.celllist)
         c.celllist = CUDA.zeros(Int32, mppcell, CELLX, CELLY)
     else
         fill!(c.celllist, zero(Int32))
@@ -110,6 +112,7 @@ function update!(c::GPUCellList)
     fill!(c.cnt, zero(Int32))
 
     if c.pairsn > length(c.pairs) || c.pairsn < length(c.pairs) * 0.6                       # if current number of pairs more than pair list or too small - then resize
+        CUDA.unsafe_free!(c.pairs)
         c.pairs    = CUDA.fill((zero(Int32), zero(Int32), NaN), Int(ceil(c.pairsn/0.8))) 
     else
         fill!(c.pairs, (zero(Int32), zero(Int32), NaN))

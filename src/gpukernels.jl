@@ -573,6 +573,7 @@ function ∑∇W_2d!(sum∇W, ∇Wₙ, pairs, points, kernel, H⁻¹)
     CUDA.@sync gpukernel(sum∇W, ∇Wₙ, pairs, points, kernel, H⁻¹; threads = Tx, blocks = Bx)
 end
 
+
 #####################################################################
 
 function kernel_∂ρ∂tDDT!(∑∂ρ∂t,  ∇Wₙ, pairs, points, h, m₀, δᵩ, c₀, γ, g, ρ₀, ρ, v, MotionLimiter) 
@@ -1015,34 +1016,51 @@ function update_all!(ρ, ρΔt½, v, vΔt½, x, xΔt½, ∑∂ρ∂t, ∑∂v∂
 end
 
 #####################################################################
-function kernel_Δt_stepping(acceleration, points, velocity, c₀, h, CFL) 
+
+function kernel_Δt_stepping!(buf, v, points, h, η²) 
     index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
-    if index <= length(x)
-        # TBD
+    if index <= length(buf)
+        vp = v[index]
+        pp = points[index]
+        buf[index] = abs(h * (vp[1] * pp[1] + vp[2] * pp[2]) / (pp[1]^2 + pp[2]^2 + η²))
     end
     return nothing
 end
+function kernel_Δt_stepping_norm!(buf, a) 
+    index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
+    if index <= length(buf)
+        buf[index] =  a[index, 1]^2 + a[index, 2]^2 
+    end
+    return nothing
+end
+"""    
+    Δt_stepping(buf, a, v, points, c₀, h, CFL) 
+
 """
-    
-    kernel_Δt_stepping!(acceleration, points, velocity, c₀, h, CFL) 
+function Δt_stepping(buf, a, v, points, c₀, h, CFL) 
+    η²  = (0.01)h * (0.01)h
 
-
-"""
-function Δt_stepping(acceleration, points, velocity, c₀, h, CFL) 
-
-    gpukernel = @cuda launch=false Δt_stepping(acceleration, points, velocity, c₀, h, CFL) 
+    gpukernel = @cuda launch=false kernel_Δt_stepping_norm!(buf, a) 
     config = launch_configuration(gpukernel.fun)
-    Nx = length(points)
+    Nx = length(buf)
     maxThreads = config.threads
     Tx  = min(maxThreads, Nx)
     Bx = cld(Nx, Tx)
-    CUDA.@sync gpukernel(acceleration, points, velocity, c₀, h, CFL)
+    CUDA.@sync gpukernel(buf, a; threads = Tx, blocks = Bx)
+
+    dt1 = sqrt(h / maximum(buf))
+
+    gpukernel = @cuda launch=false kernel_Δt_stepping!(buf, v, points, h, η²) 
+    config = launch_configuration(gpukernel.fun)
+    Nx = length(buf)
+    maxThreads = config.threads
+    Tx  = min(maxThreads, Nx)
+    Bx = cld(Nx, Tx)
+    CUDA.@sync gpukernel(buf, v, points, h, η²; threads = Tx, blocks = Bx)
+    
+    visc  = maximum(buf)
+    dt2   = h / (c₀ + visc)
+    dt    = CFL * min(dt1, dt2)
+
+    return dt
 end
-
-
-
-
-# Based on the density derivative at "n", we calculate "n+½"
-#@. density_n_half  = density + dρdtI * (dt/2)
-# We make sure to limit the density of boundary particles in such a way that they cannot produce suction
-#density_n_half[(density_n_half .< ρ₀) .* BoundaryBool] .= ρ₀
