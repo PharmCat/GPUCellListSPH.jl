@@ -36,12 +36,19 @@ fluid_csv    = joinpath(path, "./input/FluidPoints_Dp0.02.csv")
 boundary_csv = joinpath(path, "./input/BoundaryPoints_Dp0.02.csv")
 
 
-cpupoints, DF_FLUID, DF_BOUND    = GPUCellListSPH.loadparticles(fluid_csv, boundary_csv)
+    
+    cpupoints, DF_FLUID, DF_BOUND    = GPUCellListSPH.loadparticles(fluid_csv, boundary_csv)
 
     ρ   = cu(Array([DF_FLUID.Rhop;DF_BOUND.Rhop]))
+    ρΔt½  = copy(ρ)
     ml  = cu([ ones(size(DF_FLUID,1)) ; zeros(size(DF_BOUND,1))])
+
+    isboundary  = .!Bool.(ml)
+
     gf = cu([-ones(size(DF_FLUID,1)) ; ones(size(DF_BOUND,1))])
     v   = CUDA.fill((0.0, 0.0), length(cpupoints))
+    vΔt½  = copy(v)
+
     a   = CUDA.zeros(Float64, length(cpupoints))
 
     dx  = 0.02
@@ -56,92 +63,78 @@ cpupoints, DF_FLUID, DF_BOUND    = GPUCellListSPH.loadparticles(fluid_csv, bound
     g   = 9.81
     c₀  = sqrt(g * 2) * 20
     γ   = 7
-    dt  = 1e-5
+    Δt  = dt  = 1e-5
     δᵩ  = 0.1
     CFL = 0.2
 
     cellsize = (H, H)
-    gpupoints = cu(cpupoints)
+    x = gpupoints = cu(cpupoints)
+    xΔt½ = copy(gpupoints)
+
     N      = length(cpupoints)
-    pcell = CUDA.fill((Int32(0), Int32(0)), N)
-    pvec  = CUDA.zeros(Int32, N)
-    cs1 = cellsize[1]
-    cs2 = cellsize[2]
-    MIN1   = minimum(x->x[1], gpupoints) 
-    MIN1   = MIN1 - abs((MIN1 + sqrt(eps())) * sqrt(eps()))
-    MAX1   = maximum(x->x[1], gpupoints) 
-    MIN2   = minimum(x->x[2], gpupoints) 
-    MIN2   = MIN2 - abs((MIN1 + sqrt(eps())) * sqrt(eps()))
-    MAX2   = maximum(x->x[2], gpupoints)
-    range1 = MAX1 - MIN1
-    range2 = MAX2 - MIN2
-    CELL1  = ceil(Int, range1/cs1)
-    CELL2  = ceil(Int, range1/cs2)
 
-    cellpnum     = CUDA.zeros(Int32, CELL1, CELL2)
-    
-
-    GPUCellListSPH.cellmap_2d!(pcell, gpupoints, (cs1, cs2), (MIN1, MIN2))
-
-    GPUCellListSPH.cellpnum_2d!(cellpnum, gpupoints,  (cs1, cs2), (MIN1, MIN2))
-
-    mppcell  = maxpoint = maximum(cellpnum)
-    mpair    = GPUCellListSPH.мaxpairs_2d(cellpnum)
-
-    celllist     = CUDA.zeros(Int32, CELL1, CELL2, mppcell)
-
-    fill!(cellpnum, zero(Int32))
-    GPUCellListSPH.fillcells_naive_2d!(celllist, cellpnum, pcell)
-    
-    cnt          = CUDA.zeros(Int, 1)
-    pairs        = CUDA.fill((zero(Int32), zero(Int32), NaN), mpair)
-
-    GPUCellListSPH.neib_internal_2d!(pairs, cnt, cellpnum, gpupoints, celllist, dist)
-
-    GPUCellListSPH.neib_external_2d!(pairs, cnt, cellpnum, gpupoints, celllist,  (-1, 1), dist)
-    GPUCellListSPH.neib_external_2d!(pairs, cnt, cellpnum, gpupoints, celllist,   (0, 1), dist)
-    GPUCellListSPH.neib_external_2d!(pairs, cnt, cellpnum, gpupoints, celllist,   (1, 1), dist)
-    GPUCellListSPH.neib_external_2d!(pairs, cnt, cellpnum, gpupoints, celllist,   (1, 0), dist)
-#####################################################################
-system = GPUCellListSPH.GPUCellList(cpupoints, cellsize, H)
-@benchmark GPUCellListSPH.update!($system)
-#####################################################################
     sphkernel    = WendlandC2(Float64, 2)
 
-    sumW = CUDA.zeros(Float64, N)
+    system  = GPUCellListSPH.GPUCellList(cpupoints, cellsize, H)
+ 
+    sumW    = CUDA.zeros(Float64, N)
+    sum∇W   = CUDA.zeros(Float64, N, 2)
+    ∇Wₙ     =  CUDA.fill((zero(Float64), zero(Float64)), length(system.pairs))
+    ∑∂ρ∂t   = CUDA.zeros(Float64, N)
+    ∑∂Π∂t   = CUDA.zeros(Float64, N, 2)
+    ∑∂v∂t   = CUDA.zeros(Float64, N, 2)
 
 #== ==#
+function sph_simulation(system, sphkernel, ρ, ρΔt½, v, vΔt½, xΔt½, ∑∂Π∂t, ∑∂ρ∂t, ∑∂v∂t, sumW, sum∇W, ∇Wₙ, Δt, ρ₀, isboundary, ml, h, H⁻¹, m₀, δᵩ, c₀, γ, g, α)
 
-    GPUCellListSPH.∑W_2d!(sumW, cellcounter, pairs, sphkernel, H⁻¹)
+    GPUCellListSPH.update!(system)
 
-    sum∇W = CUDA.zeros(Float64, N, 2)
-    ∇Wₙ    =  CUDA.fill((zero(Float64), zero(Float64)), mpair, CELL1, CELL2)
-    c∇Wₙ    =  CUDA.fill((zero(Float64), zero(Float64)), mpair, CELL1, CELL2)
+    x     = system.points
+    pairs = system.pairs
 
-    GPUCellListSPH.∑∇W_2d!(sum∇W, ∇Wₙ, cellcounter, pairs, gpupoints, sphkernel, H⁻¹)
+    fill!(sumW, zero(Float64))
+    fill!(∑∂ρ∂t, zero(Float64))
+    fill!(∑∂Π∂t, zero(Float64))
+    fill!(∑∂v∂t, zero(Float64))
+
+    if length(∇Wₙ) != length(pairs)
+        ∇Wₙ =  CUDA.fill((zero(Float64), zero(Float64)), length(system.pairs))
+    end
+
+    GPUCellListSPH.∑W_2d!(sumW, pairs, sphkernel, H⁻¹)
+
+    GPUCellListSPH.∑∇W_2d!(sum∇W, ∇Wₙ, pairs, x, sphkernel, H⁻¹)
+
+    GPUCellListSPH.∂ρ∂tDDT!(∑∂ρ∂t, ∇Wₙ, pairs, x, h, m₀, δᵩ, c₀, γ, g, ρ₀, ρ, v, ml) 
+
+    GPUCellListSPH.∂Π∂t!(∑∂Π∂t, ∇Wₙ, pairs, x, h, ρ, α, v, c₀, m₀)
     
-    ∇Wₙ2    =  CUDA.fill((NaN, NaN), length(pairs))
-    ∇Wₙ3    =  CUDA.fill((NaN, NaN), length(pairs))
-    GPUCellListSPH.∑∇W_l_2d!(sum∇W, ∇Wₙ2, cellcounter, pairs, gpupoints, sphkernel, H⁻¹)
-    GPUCellListSPH.∑∇W_l2_2d!(sum∇W, c∇Wₙ, cellcounter, pairs, gpupoints, sphkernel, H⁻¹)
+    GPUCellListSPH.∂v∂t!(∑∂v∂t,  ∇Wₙ, pairs,  m₀, ρ, c₀, γ, ρ₀) 
 
-    @benchmark GPUCellListSPH.∑∇W_2d!($copy(sum∇W), $∇Wₙ, $cellcounter, $pairs, $gpupoints, $sphkernel, $H⁻¹)
-    @benchmark GPUCellListSPH.∑∇W_l_2d!($copy(sum∇W), $∇Wₙ2, $cellcounter, $pairs, $gpupoints, $sphkernel, $H⁻¹)
-    @benchmark GPUCellListSPH.∑∇W_l2_2d!($copy(sum∇W), $∇Wₙ, $cellcounter, $pairs, $gpupoints, $sphkernel, $H⁻¹)
+    GPUCellListSPH.completed_∂v∂t!(∑∂v∂t, ∑∂Π∂t,  (0.0, g), gf)
 
-    ∑∂ρ∂t = CUDA.zeros(Float64, N)
-
-    GPUCellListSPH.∂ρ∂tDDT!(∑∂ρ∂t,  ∇Wₙ, cellcounter, pairs, gpupoints, h, m₀, δᵩ, c₀, γ, g, ρ₀, ρ, v, ml) 
-
-    ∑∂Π∂t = CUDA.zeros(Float64, N, 2)
+    GPUCellListSPH.update_ρ!(ρΔt½, ∑∂ρ∂t, Δt/2, ρ₀, isboundary)
     
+    GPUCellListSPH.update_vp∂v∂tΔt!(vΔt½, ∑∂v∂t, Δt/2, ml) 
 
-    GPUCellListSPH.∂Π∂t!(∑∂Π∂t, ∇Wₙ, cellcounter, pairs, gpupoints, h, ρ, α, v, c₀, m₀)
-    
-    ∑∂v∂t = CUDA.zeros(Float64, N, 2)
+    GPUCellListSPH.update_xpvΔt!(xΔt½, vΔt½, Δt/2, ml)
 
-    GPUCellListSPH.∂v∂t!(∑∂v∂t,  ∇Wₙ, cellcounter, pairs, gpupoints, m₀, ρ, c₀, γ, ρ₀) 
+    fill!(∑∂ρ∂t, zero(Float64))
+    fill!(∑∂Π∂t, zero(Float64))
+    fill!(∑∂v∂t, zero(Float64))
 
+    GPUCellListSPH.∂ρ∂tDDT!(∑∂ρ∂t,  ∇Wₙ, pairs, xΔt½, h, m₀, δᵩ, c₀, γ, g, ρ₀, ρ, v, ml) 
+    GPUCellListSPH.∂Π∂t!(∑∂Π∂t, ∇Wₙ, pairs, xΔt½, h, ρ, α, v, c₀, m₀)
+    GPUCellListSPH.∂v∂t!(∑∂v∂t,  ∇Wₙ, pairs,  m₀, ρ, c₀, γ, ρ₀) 
 
+    GPUCellListSPH.completed_∂v∂t!(∑∂v∂t, ∑∂Π∂t,  (0.0, g), gf)
 
+    GPUCellListSPH.update_all!(ρ, ρΔt½, v, vΔt½, x, xΔt½, ∑∂ρ∂t, ∑∂v∂t,  Δt, ρ₀, isboundary, ml) 
+
+end
     #CUDA.registers(@cuda GPUCellListSPH.kernel_∂ρ∂tDDT!(∑∂ρ∂t,  ∇Wₙ, cellcounter, pairs, gpupoints, h, m₀, δᵩ, c₀, γ, g, ρ₀, ρ, v, ml))
+
+
+sph_simulation(system, sphkernel, ρ, ρΔt½, v, vΔt½, xΔt½, ∑∂Π∂t, ∑∂ρ∂t, ∑∂v∂t, sumW, sum∇W, ∇Wₙ, Δt, ρ₀, isboundary, ml, h, H⁻¹, m₀, δᵩ, c₀, γ, g, α)
+
+@benchmark  sph_simulation($system, $sphkernel, $ρ, $ρΔt½, $v, $vΔt½, $xΔt½, $∑∂Π∂t, $∑∂ρ∂t, $∑∂v∂t, $sumW, $sum∇W, $∇Wₙ, $Δt, $ρ₀, $isboundary, $ml, $h, $H⁻¹, $m₀, $δᵩ, $c₀, $γ, $g, $α)

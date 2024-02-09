@@ -51,7 +51,7 @@ function GPUCellList(points, cellsize, dist; mppcell = 0, mpairs = 0)
     if mppcell < maxpoint mppcell = maxpoint end
     
     
-    celllist     = CUDA.zeros(Int32, CELL1, CELL2, mppcell)     # cell list - 3-dim array, 1-dim X 2-dim - cell grid, 3-dim - particle list
+    celllist     = CUDA.zeros(Int32, mppcell, CELL1, CELL2)     # cell list - 3-dim array, 1-dim X 2-dim - cell grid, 3-dim - particle list
 
     # fillcells_cspwn_2d! or fillcells_psort_2d! function can be used
     # but seems fillcells_naive_2d! is faster
@@ -96,11 +96,11 @@ function update!(c::GPUCellList)
     cellpnum_2d!(c.cellpnum, c.points, (c.cs[2], c.cs[2]), c.offset)
     maxpoint = maximum(c.cellpnum)
 
-    CELLX, CELLY, mppcell = size(c.celllist)
+    mppcell, CELLX, CELLY = size(c.celllist)
 
     if maxpoint > mppcell
         mppcell = Int(ceil(maxpoint*1.05 + 1)) 
-        c.celllist = CUDA.zeros(Int32, CELLX, CELLY, mppcell)
+        c.celllist = CUDA.zeros(Int32, mppcell, CELLX, CELLY)
     else
         fill!(c.celllist, zero(Int32))
     end

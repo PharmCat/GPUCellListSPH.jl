@@ -11,8 +11,14 @@ mutable struct SPHProblem
     ∑∂Π∂t
     ∑∂v∂t
     ∑∂ρ∂t
-    function SPHProblem(dim, h, H, kernel, ∑W, ∑∇W, ∇Wₙ, ∑∂Π∂t, ∑∂v∂t, ∑∂ρ∂t)
-        new{}(dim, h, 1/h, H, 1/H, kernel, ∑W, ∑∇W, ∇Wₙ, ∑∂Π∂t, ∑∂v∂t, ∑∂ρ∂t)
+    ρΔt½ 
+    vΔt½
+    xΔt½
+    ml
+    gf
+    isboundary
+    function SPHProblem(dim, h, H, kernel, ∑W, ∑∇W, ∇Wₙ, ∑∂Π∂t, ∑∂v∂t, ∑∂ρ∂t, ρΔt½, vΔt½, xΔt½, ml, gf, isboundary)
+        new{}(dim, h, 1/h, H, 1/H, kernel, ∑W, ∑∇W, ∇Wₙ, ∑∂Π∂t, ∑∂v∂t, ∑∂ρ∂t, ρΔt½, vΔt½, xΔt½, ml, gf, isboundary)
     end
 end
 
