@@ -3,7 +3,7 @@
 #####################################################################
 
 function kernel_cellmap_2d!(pcell, points,  h⁻¹, offset) 
-    i = threadIdx().x + (blockIdx().x - 1) * blockDim().x
+    i = threadIdx().x + (blockIdx().x - Int32(1)) * blockDim().x
     if i <= length(points)
         @fastmath  p₁ =  (points[i][1] - offset[1]) * h⁻¹[1]
         @fastmath  p₂ =  (points[i][2] - offset[2]) * h⁻¹[2]
@@ -38,9 +38,15 @@ function kernel_cellpnum_2d!(cellpnum, points,  h⁻¹, offset)
         @fastmath  p₂ =  (points[i][2] - offset[2]) * h⁻¹[2]
         pᵢ₁ = ceil(Int32, p₁) 
         pᵢ₂ = ceil(Int32, p₂)
-        if csᵢ >= pᵢ₁ > 0 && csⱼ >= pᵢ₂ > 0
+        if pᵢ₁ <= 0  pᵢ₁  = 1  end
+        if pᵢ₁ > csᵢ pᵢ₁ = csᵢ end
+
+        if pᵢ₂ <= 0  pᵢ₂  = 1   end
+        if pᵢ₂ > csⱼ pᵢ₂  = csⱼ end
+
+        #if csᵢ >= pᵢ₁ > 0 && csⱼ >= pᵢ₂ > 0
             CUDA.@atomic cellpnum[pᵢ₁, pᵢ₂] += one(Int32) 
-        end
+        #end
     end
     return nothing
 end
@@ -61,9 +67,21 @@ end
 
 function kernel_fillcells_naive_2d!(celllist, cellpnum, pcell) 
     indexᵢ = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
-    if indexᵢ <= length(pcell) 
+    if indexᵢ <= length(pcell)
+        csᵢ = size(cellpnum, 1) 
+        csⱼ = size(cellpnum, 2) 
         pᵢ, pⱼ = pcell[indexᵢ]
+
+        if pᵢ <= 0  pᵢ  = 1  end
+        if pᵢ > csᵢ pᵢ = csᵢ end
+
+        if pⱼ <= 0  pⱼ  = 1   end
+        if pⱼ > csⱼ pⱼ  = csⱼ end
+
+        #if n + 1 > size(celllist, 1) || pᵢ > size(celllist, 2) || pⱼ > size(celllist, 3) @cuprintln( n + 1 , " - ", pᵢ ," - ", pⱼ) end
+
         n = CUDA.@atomic cellpnum[pᵢ, pⱼ] += 1
+        
         celllist[n + 1, pᵢ, pⱼ] = indexᵢ
     end
     return nothing
@@ -607,7 +625,8 @@ function kernel_∂ρ∂tDDT!(∑∂ρ∂t,  ∇Wₙ, pairs, points, h, m₀, δ
 
             ∇Wᵢ   = ∇Wₙ[index]
 
-            r²    = xᵢ[1]*xⱼ[1] + xᵢ[2]*xⱼ[2]  #  xᵢ⋅ xⱼ = d^2
+            #r²    = (xᵢ[1]-xⱼ[1])^2 + (xᵢ[2]-xⱼ[2])^2  #  Δx ⋅ Δx 
+            r²    = d^2
             #=
             z  = Δx[2]
             Cb = (c₀ * c₀ * ρ₀) * γ⁻¹
@@ -616,17 +635,19 @@ function kernel_∂ρ∂tDDT!(∑∂ρ∂t,  ∇Wₙ, pairs, points, h, m₀, δ
             ψ  = 2 * (ρᵢ - ρⱼ) * Δx / r²
             =#
             
-            dot3  = -(Δx[1]*∇Wᵢ[1] + Δx[2]*∇Wᵢ[2]) #  - Δx ⋅ ∇Wᵢ 
+            dot3  = -(Δx[1] * ∇Wᵢ[1] + Δx[2] * ∇Wᵢ[2]) #  - Δx ⋅ ∇Wᵢ 
             
             drhopvp = ρ₀ * (1 + DDTgz * Δx[2])^γ⁻¹ - ρ₀
+
             visc_densi = DDTkh * c₀ * (ρⱼ - ρᵢ - drhopvp) / (r² + η²)
+
             delta_i    = visc_densi * dot3 * m₀ / ρⱼ
 
             drhopvn = ρ₀ * (1 - DDTgz * Δx[2])^γ⁻¹ - ρ₀
             visc_densi = DDTkh * c₀ * (ρᵢ - ρⱼ - drhopvn) / (r² + η²)
             delta_j    = visc_densi * dot3 * m₀ / ρᵢ
 
-            m₀dot     = m₀ * (Δv[1]*∇Wᵢ[1] + Δv[2]*∇Wᵢ[2])  #  Δv ⋅ ∇Wᵢ
+            m₀dot     = m₀ * (Δv[1] * ∇Wᵢ[1] + Δv[2] * ∇Wᵢ[2])  #  Δv ⋅ ∇Wᵢ
 
             CUDA.@atomic ∑∂ρ∂t[pᵢ] += (m₀dot + delta_i * MotionLimiter[pᵢ])
             CUDA.@atomic ∑∂ρ∂t[pⱼ] += (m₀dot + delta_j * MotionLimiter[pⱼ])
@@ -668,7 +689,9 @@ function kernel_∂Π∂t!(∑∂Π∂t, ∇Wₙ, pairs, points, h, ρ, α, v, c
             ρⱼ    = ρ[pⱼ]
             Δx    = (xᵢ[1] - xⱼ[1], xᵢ[2] - xⱼ[2])
             Δv    = (v[pᵢ][1] - v[pⱼ][1], v[pᵢ][2] - v[pⱼ][2])
-            r²    = xᵢ[1]*xⱼ[1] + xᵢ[2]*xⱼ[2] 
+
+            #r²    = (xᵢ[1] - xⱼ[1])^2 + (xᵢ[2] - xⱼ[2])^2 
+            r²    = d^2
 
             ρₘ    = (ρᵢ + ρⱼ) * 0.5
             
@@ -1026,7 +1049,7 @@ end
 function kernel_Δt_stepping_norm!(buf, a) 
     index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
     if index <= length(buf)
-        buf[index] =  a[index, 1]^2 + a[index, 2]^2 
+        buf[index] =  sqrt(a[index, 1]^2 + a[index, 2]^2) 
     end
     return nothing
 end
