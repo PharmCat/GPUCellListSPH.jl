@@ -400,6 +400,7 @@ function ∑W_2d!(sumW, pairs, sphkernel, H⁻¹)
     Bx = cld(Nx, Tx)
     CUDA.@sync gpukernel(sumW, pairs, sphkernel, H⁻¹; threads = Tx, blocks = Bx)
 end
+
 #=
 function kernel_∑W_2d!(sumW, cellcounter, pairs, sphkernel, H⁻¹) 
     indexᵢ = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
@@ -673,7 +674,7 @@ function kernel_∂Π∂t!(∑∂Π∂t, ∇Wₙ, pairs, points, h, ρ, α, v, c
             
             ∇W    = ∇Wₙ[index]
 
-            cond   = Δv[1]*Δx[1] +  Δv[2]*Δx[2] 
+            cond   = Δv[1] * Δx[1] +  Δv[2] * Δx[2] 
 
             cond_bool = cond < 0
 
@@ -787,9 +788,7 @@ function kernel_∂v∂t!(∑∂v∂t,  ∇Wₙ,  pairs, m, ρ, c₀, γ, ρ₀)
         pair  = pairs[index]
         pᵢ    = pair[1]; pⱼ = pair[2]; d = pair[3]
         if !isnan(d)
-            
-            #xᵢ    = points[pᵢ]
-            #xⱼ    = points[pⱼ]
+
             ρᵢ    = ρ[pᵢ]
             ρⱼ    = ρ[pⱼ]
 
@@ -797,7 +796,7 @@ function kernel_∂v∂t!(∑∂v∂t,  ∇Wₙ,  pairs, m, ρ, c₀, γ, ρ₀)
             Pⱼ    = pressure(ρⱼ, c₀, γ, ρ₀)
             ∇W    = ∇Wₙ[index]
 
-            Pfac  = (Pᵢ+Pⱼ)/(ρᵢ*ρⱼ)
+            Pfac  = (Pᵢ + Pⱼ) / (ρᵢ * ρⱼ)
 
             ∂v∂t  = (- m * Pfac * ∇W[1], - m * Pfac * ∇W[2])
 
@@ -912,7 +911,6 @@ function kernel_update_ρ!(ρ, ∑∂ρ∂t, Δt, ρ₀, isboundary)
     return nothing
 end
 """
-    
     update_ρ!(ρ, ∑∂ρ∂t, Δt, ρ₀, isboundary) 
 
 
@@ -931,27 +929,27 @@ end
 function kernel_update_vp∂v∂tΔt!(v, ∑∂v∂t, Δt, ml) 
     index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
     if index <= size(∑∂v∂t, 1)
-        val = v[index]
-        v[index] = (val[1] + ∑∂v∂t[index, 1] * Δt * ml[index], val[2] + ∑∂v∂t[index, 2] * Δt * ml[index])
+        @inbounds val = v[index]
+        @inbounds v[index] = (val[1] + ∑∂v∂t[index, 1] * Δt * ml[index], val[2] + ∑∂v∂t[index, 2] * Δt * ml[index])
     end
     return nothing
 end
 """
-    
     update_vp∂v∂tΔt!(v, ∑∂v∂t, Δt, ml) 
 
 
 """
 function update_vp∂v∂tΔt!(v, ∑∂v∂t, Δt, ml) 
-    if length(v) != size(∑∂v∂t, 1) error("Wrong length") end
-    gpukernel = @cuda launch=false kernel_update_vp∂v∂tΔt!(v, ∑∂v∂t, Δt, ml) 
+    if !(length(v) == size(∑∂v∂t, 1) == length(ml)) error("Wrong length") end
+    gpukernel = @cuda launch = false kernel_update_vp∂v∂tΔt!(v, ∑∂v∂t, Δt, ml) 
     config = launch_configuration(gpukernel.fun)
     Nx = size(∑∂v∂t, 1)
     maxThreads = config.threads
     Tx  = min(maxThreads, Nx)
-    Bx = cld(Nx, Tx)
+    Bx  = cld(Nx, Tx)
     CUDA.@sync gpukernel(v, ∑∂v∂t, Δt, ml; threads = Tx, blocks = Bx)
 end
+
 #####################################################################
 function kernel_update_xpvΔt!(x, v, Δt, ml) 
     index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
@@ -963,7 +961,6 @@ function kernel_update_xpvΔt!(x, v, Δt, ml)
     return nothing
 end
 """
-    
     update_xpvΔt!(x, v, Δt, ml) 
 
 
