@@ -26,19 +26,25 @@ cellsize = (H, H)
 sphkernel    = WendlandC2(Float64, 2)
 
 system  = GPUCellList(cpupoints, cellsize, H)
+N       = length(cpupoints)
+ρ       = CUDA.zeros(Float64, N)
+copyto!(ρ, Array([DF_FLUID.Rhop;DF_BOUND.Rhop]))
 
-ρ           = cu(Array([DF_FLUID.Rhop;DF_BOUND.Rhop]))
-ml          = cu(append!(ones(Float64, size(DF_FLUID, 1)), zeros(Float64, size(DF_BOUND, 1))))
+ml        = CUDA.zeros(Float64, N)
+copyto!(ml, append!(ones(Float64, size(DF_FLUID, 1)), zeros(Float64, size(DF_BOUND, 1))))
+
 isboundary  = .!Bool.(ml)
-gf          = cu([-ones(size(DF_FLUID,1)) ; ones(size(DF_BOUND,1))])
-v           = CUDA.fill((0.0, 0.0), length(cpupoints))
 
+gf        = CUDA.zeros(Float64, N)
+copyto!(gf,[-ones(size(DF_FLUID,1)) ; ones(size(DF_BOUND,1))])
+
+v           = CUDA.fill((0.0, 0.0), length(cpupoints))
 
 sphprob =  SPHProblem(system, h, H, sphkernel, ρ, v, ml, gf, isboundary, ρ₀, m₀, Δt, α, g, c₀, γ, δᵩ, CFL)
 
+prob = sphprob
 # batch - number of iteration until check time and vtp
 # timeframe - simulation time
 # vtkwritetime - write vtp file each interval
 # vtkpath - path to vtp files
-timesolve!(sphprob; batch = 10, timeframe = 1.0, vtkwritetime = 0.01, vtkpath = "D:/vtk/") 
-
+timesolve!(sphprob; batch = 10, timeframe = 5.0, vtkwritetime = 0.02, vtkpath = "D:/vtk/") 

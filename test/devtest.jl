@@ -494,3 +494,114 @@ while true
     rand(1:10^8) == 0xB00 && break
 end
 finish!(prog)
+
+
+
+
+
+minimum(sphprob.∑W)
+minimum(x->x[1], sphprob.∑∇W)
+minimum(x->x[1], sphprob.∇Wₙ)
+
+minimum(sphprob.∑∂ρ∂t)
+minimum(sphprob.∑∂Π∂t)
+minimum(sphprob.∑∂v∂t)
+
+
+minimum(sphprob.ρ)
+minimum(sphprob.ρΔt½)
+
+
+minimum(x->x[1], sphprob.v)
+minimum(x->x[1], sphprob.vΔt½)
+
+
+minimum(x->x[2], sphprob.system.points)
+maximum(x->x[2], sphprob.system.points)
+minimum(x->x[2], sphprob.xΔt½)
+
+
+findall(isnan, sphprob.ρ)
+
+sphprob.v[35]
+sphprob.system.points[35]
+sphprob.∑W[35]
+sphprob.∑∇W[35]
+
+p = neighborlist(prob.system)
+
+GPUCellListSPH.∂ρ∂tDDT!(prob.∑∂ρ∂t,  prob.∇Wₙ, p, prob.xΔt½, prob.h, prob.m₀, prob.δᵩ, prob.c₀, prob.γ, prob.g, prob.ρ₀, prob.ρ, prob.v, prob.ml)
+
+prob.∑∂ρ∂t[4197]
+
+prob.∇Wₙ[4197]
+
+prob.xΔt½[4197]
+
+prob.ρ[4197]
+
+prob.v[4197]
+
+kernel_∂ρ∂tDDT!(prob.∑∂ρ∂t,  prob.∇Wₙ, p, prob.xΔt½, prob.h, prob.m₀, prob.δᵩ, prob.c₀, prob.γ, prob.g, prob.ρ₀, prob.ρ, prob.v, prob.ml) 
+
+function kernel_∂ρ∂tDDT!(∑∂ρ∂t,  ∇Wₙ, pairs, points, h, m₀, δᵩ, c₀, γ, g, ρ₀, ρ, v, MotionLimiter) 
+
+    for index = 1:length(pairs)
+        pair  = pairs[index]
+        pᵢ    = pair[1]; pⱼ = pair[2]; d = pair[3]
+        if !isnan(d)
+            γ⁻¹  = 1/γ
+            η²   = (0.1*h)*(0.1*h)
+            Cb    = (c₀ * c₀ * ρ₀) * γ⁻¹
+            DDTgz = ρ₀ * g / Cb
+            DDTkh = 2 * h * δᵩ
+
+            #=
+            Cb = (c₀ * c₀ * ρ₀) * γ⁻¹
+            Pᴴ =  ρ₀ * g * z
+            ᵸᵀᴴ
+            =#
+            xᵢ    = points[pᵢ]
+            xⱼ    = points[pⱼ]
+            ρᵢ    = ρ[pᵢ]
+            ρⱼ    = ρ[pⱼ]
+
+            Δx    = (xᵢ[1] - xⱼ[1], xᵢ[2] - xⱼ[2])
+            Δv    = (v[pᵢ][1] - v[pⱼ][1], v[pᵢ][2] - v[pⱼ][2])
+
+            ∇Wᵢ   = ∇Wₙ[index]
+
+            #  Δx ⋅ Δx 
+            r²    = Δx[1]^2 + Δx[2]^2 
+            #=
+            z  = Δx[2]
+            Cb = (c₀ * c₀ * ρ₀) * γ⁻¹
+            Pᴴ =  ρ₀ * g * z
+            ρᴴ =  ρ₀ * (((Pᴴ + 1)/Cb)^γ⁻¹ - 1)
+            ψ  = 2 * (ρᵢ - ρⱼ) * Δx / r²
+            =#
+            
+            dot3  = -(Δx[1] * ∇Wᵢ[1] + Δx[2] * ∇Wᵢ[2]) #  - Δx ⋅ ∇Wᵢ 
+          
+            if 1 + DDTgz * Δx[2] < 0 error("!!! $index  $pᵢ   $pⱼ  $Δx $Δv  $∇Wᵢ $r² $dot3" ) end
+            drhopvp = ρ₀ * (1 + DDTgz * Δx[2])^γ⁻¹ - ρ₀ ## << CHECK
+            
+            
+            
+            visc_densi = DDTkh * c₀ * (ρⱼ - ρᵢ - drhopvp) / (r² + η²)
+            delta_i    = visc_densi * dot3 * m₀ / ρⱼ
+
+            drhopvn = ρ₀ * (1 - DDTgz * Δx[2])^γ⁻¹ - ρ₀
+            visc_densi = DDTkh * c₀ * (ρᵢ - ρⱼ - drhopvn) / (r² + η²)
+            delta_j    = visc_densi * dot3 * m₀ / ρᵢ
+
+            m₀dot     = m₀ * (Δv[1] * ∇Wᵢ[1] + Δv[2] * ∇Wᵢ[2])  #  Δv ⋅ ∇Wᵢ
+
+            ∑∂ρ∂t = (m₀dot + delta_i * MotionLimiter[pᵢ])
+            if isnan(∑∂ρ∂t) error("!!! $index  $pᵢ   $pⱼ  $Δx $Δv  $∇Wᵢ $r² $dot3 $drhopvp $visc_densi $delta_i" ) end
+            #CUDA.@atomic ∑∂ρ∂t[pⱼ] += (m₀dot + delta_j * MotionLimiter[pⱼ])
+            
+        end
+    end
+    return nothing
+end

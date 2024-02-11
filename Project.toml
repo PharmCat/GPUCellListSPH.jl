@@ -9,6 +9,7 @@ CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
 DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
 ProgressMeter = "92933f4c-e287-5a05-a399-4b506db050ca"
 SPHKernels = "54ab9b88-2582-4358-b400-8014666a1730"
+StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 WriteVTK = "64499a7a-5c06-52f2-abe2-ccb03c286192"
 
 

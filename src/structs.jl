@@ -43,9 +43,9 @@ function GPUCellList(points, cellsize, dist; mppcell = 0, mpairs = 0)
     cnt          = CUDA.zeros(Int, 1)                           # temp array for particles counter 
     points       = cu(points)                                   # array with particles / points
 
-    cellmap_2d!(pcell, points, (cs1, cs2), (MIN1, MIN2))        # modify pcell < assign cell to each particle
+    #cellmap_2d!(pcell, points, (cs1, cs2), (MIN1, MIN2))        # modify pcell < assign cell to each particle
 
-    cellpnum_2d!(cellpnum, points,  (cs1, cs2), (MIN1, MIN2))   # modify cellpnum < count particle number for each cell
+    cellpnum2_2d!(pcell, cellpnum, points,  (cs1, cs2), (MIN1, MIN2))   # modify cellpnum < count particle number for each cell
 
     maxpoint = Int(ceil(maximum(cellpnum)*1.05 + 1))                                # mppcell - maximum particle in cell for cell list 
     if mppcell < maxpoint mppcell = maxpoint end
@@ -91,10 +91,10 @@ end
 Full update cell grid.
 """
 function update!(c::GPUCellList)
-    cellmap_2d!(c.pcell, c.points, (c.cs[2], c.cs[2]), c.offset)
+    #cellmap_2d!(c.pcell, c.points, (c.cs[2], c.cs[2]), c.offset)
 
     fill!(c.cellpnum, zero(Int32))
-    cellpnum_2d!(c.cellpnum, c.points, (c.cs[2], c.cs[2]), c.offset)
+    cellpnum2_2d!(c.pcell, c.cellpnum, c.points, (c.cs[2], c.cs[2]), c.offset)
     maxpoint = maximum(c.cellpnum)
 
     mppcell, CELLX, CELLY = size(c.celllist)
