@@ -47,4 +47,9 @@ prob = sphprob
 # timeframe - simulation time
 # vtkwritetime - write vtp file each interval
 # vtkpath - path to vtp files
-timesolve!(sphprob; batch = 10, timeframe = 5.0, vtkwritetime = 0.02, vtkpath = "D:/vtk/") 
+# pcx - make paraview collection
+timesolve!(sphprob; batch = 10, timeframe = 1.0, vtkwritetime = 0.02, vtkpath = "D:/vtk/", pvc = true, timestepping = false)
+
+# timestepping adjust dt
+# time lims for dt
+timesolve!(sphprob; batch = 10, timeframe = 10.0, vtkwritetime = 0.02, vtkpath = "D:/vtk/", pvc = true, timestepping = true, timelims = (sqrt(eps()), 2e-5)) 

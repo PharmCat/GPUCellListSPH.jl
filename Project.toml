@@ -19,6 +19,7 @@ CUDA = "5"
 CSV = "0.7, 0.8"
 DataFrames = "1"
 SPHKernels = "2.2"
+StaticArrays = "1"
 WriteVTK = "1"
 
 [extras]

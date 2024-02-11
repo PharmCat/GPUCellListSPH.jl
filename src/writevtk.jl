@@ -32,6 +32,34 @@ function create_vtp_file(filename, x, ρ, ∑∂v∂t, v)
 end
 
 
+function add_timestep(filename, pvd, time, x, ρ, ∑∂v∂t, v)
+
+    ax = Array(x)
+    points = zeros(Float64, 2, length(ax))
+    for (i, r) in enumerate(eachcol(points))
+        r .= ax[i]
+    end
+    polys = empty(MeshCell{WriteVTK.PolyData.Polys,UnitRange{Int64}}[])
+    verts = empty(MeshCell{WriteVTK.PolyData.Verts,UnitRange{Int64}}[])
+
+    all_cells  = (verts, polys)
+
+    varr        = Array(v)
+    v           = zeros(Float64, 2, length(varr))
+    for (i, r) in enumerate(eachcol(v))
+        r .= varr[i]
+    end
+
+    vtk_grid(filename, points, all_cells..., compress = true, append = false) do vtk
+        vtk["Density"] = Array(ρ)
+        vtk["Acceleration"] = permutedims(Array(∑∂v∂t))
+        vtk["Velocity"] = v
+        pvd[time] = vtk    
+    end
+    
+end
+
+
 # Initialize containers for VTK data structure
 #=
 polys = empty(MeshCell{WriteVTK.PolyData.Polys, UnitRange{Int64}}[])

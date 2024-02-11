@@ -81,7 +81,7 @@ timestepping - call Δt_stepping for adjust Δt
 timelims - minimal and maximum values for Δt
 """
 function stepsolve!(prob::SPHProblem, n::Int = 1; timecall = nothing, timestepping = false, timelims = (-Inf, +Inf))
-    if timestepping || timelims[1] > timelims[1] error("timelims[1] should be > timelims[2]") end
+    if timestepping && timelims[1] > timelims[1] error("timelims[1] should be < timelims[2]") end
     for iter = 1:n
 
         update!(prob.system)
@@ -97,42 +97,42 @@ function stepsolve!(prob::SPHProblem, n::Int = 1; timecall = nothing, timesteppi
             CUDA.unsafe_free!(prob.∇Wₙ)
             prob.∇Wₙ =  CUDA.fill((zero(Float64), zero(Float64)), length(pairs)) # DIM = 2
         end
-
+        # kernels sum for each cell
         ∑W_2d!(prob.∑W, pairs, prob.sphkernel, prob.H⁻¹)
-        #if isnan(minimum(prob.∑W)) error("1") end 
+        # kernels gradient  for each cell (∑∇W) and value for each pair (∇Wₙ)
         ∑∇W_2d!(prob.∑∇W, prob.∇Wₙ, pairs, x, prob.sphkernel, prob.H⁻¹)
-        #if isnan(minimum(x->x[1], prob.∑∇W)) error("2") end 
+        # density derivative with density diffusion
         ∂ρ∂tDDT!(prob.∑∂ρ∂t, prob.∇Wₙ, pairs, x, prob.h, prob.m₀, prob.δᵩ, prob.c₀, prob.γ, prob.g, prob.ρ₀, prob.ρ, prob.v, prob.ml) 
-        #if isnan(minimum(prob.∑∂ρ∂t)) error("3") end 
+        # artificial viscosity
         ∂Π∂t!(prob.∑∂Π∂t, prob.∇Wₙ, pairs, x, prob.h, prob.ρ, prob.α, prob.v, prob.c₀, prob.m₀)
-        #if isnan(minimum(prob.∑∂Π∂t)) error("4") end 
+        # momentum equation 
         ∂v∂t!(prob.∑∂v∂t,  prob.∇Wₙ, pairs,  prob.m₀, prob.ρ, prob.c₀, prob.γ, prob.ρ₀) 
-        #if isnan(minimum(prob.∑∂v∂t)) error("5") end 
+        # add gravity and artificial viscosity 
         completed_∂v∂t!(prob.∑∂v∂t, prob.∑∂Π∂t,  gravvec(prob.g, prob.dim), prob.gf) 
-        #if isnan(minimum(prob.∑∂v∂t)) error("6") end 
+        
+        # following steps (update_ρ!, update_vp∂v∂tΔt!, update_xpvΔt!) can be done in one kernel 
+        # calc ρ at Δt½
         update_ρ!(prob.ρΔt½, prob.∑∂ρ∂t, prob.Δt * 0.5, prob.ρ₀, prob.isboundary)
-        #if isnan(minimum(prob.ρΔt½)) error("7") end 
+        # calc v at Δt½
         update_vp∂v∂tΔt!(prob.vΔt½, prob.∑∂v∂t, prob.Δt * 0.5, prob.ml) 
-        #if isnan(minimum(x->x[1], prob.vΔt½)) error("8") end 
+        # calc x at Δt½
         update_xpvΔt!(prob.xΔt½, prob.vΔt½, prob.Δt * 0.5, prob.ml)
-        #if isnan(minimum(x->x[1], prob.xΔt½)) error("9") end 
+
+        # set derivative to zero for Δt½ calc
         fill!(prob.∑∂ρ∂t, zero(Float64))
         fill!(prob.∑∂Π∂t, zero(Float64))
         fill!(prob.∑∂v∂t, zero(Float64))
-
+        # density derivative with density diffusion at  xΔt½ 
         ∂ρ∂tDDT!(prob.∑∂ρ∂t,  prob.∇Wₙ, pairs, prob.xΔt½, prob.h, prob.m₀, prob.δᵩ, prob.c₀, prob.γ, prob.g, prob.ρ₀, prob.ρ, prob.v, prob.ml) 
-        #if isnan(minimum(prob.∑∂ρ∂t)) error("10") end 
+        # artificial viscosity at xΔt½ 
         ∂Π∂t!(prob.∑∂Π∂t, prob.∇Wₙ, pairs, prob.xΔt½, prob.h, prob.ρ, prob.α, prob.v, prob.c₀, prob.m₀)
-        #if isnan(minimum(prob.∑∂Π∂t)) error("11") end 
-        ∂v∂t!(prob.∑∂v∂t,  prob.∇Wₙ, pairs,  prob.m₀, prob.ρ, prob.c₀, prob.γ, prob.ρ₀) 
-        #if isnan(minimum(prob.∑∂v∂t)) error("12") end 
+        # momentum equation at ρΔt½
+        ∂v∂t!(prob.∑∂v∂t,  prob.∇Wₙ, pairs,  prob.m₀, prob.ρΔt½, prob.c₀, prob.γ, prob.ρ₀) 
+        # add gravity and artificial viscosity 
         completed_∂v∂t!(prob.∑∂v∂t, prob.∑∂Π∂t, gravvec(prob.g, prob.dim), prob.gf)
-        #if isnan(minimum(prob.∑∂v∂t)) error("13") end 
-
+        # update all with symplectic position Verlet scheme
         update_all!(prob.ρ, prob.ρΔt½, prob.v, prob.vΔt½, x, prob.xΔt½, prob.∑∂ρ∂t, prob.∑∂v∂t, prob.Δt, prob.ρ₀, prob.isboundary, prob.ml)
-        #if isnan(minimum(prob.ρ)) error("14") end 
-        #if isnan(minimum(x->x[1], x)) error("15") end 
-        #if isnan(minimum(x->x[1], prob.v)) error("16") end 
+   
 
         prob.etime += prob.Δt
 
@@ -177,12 +177,17 @@ vtkwritetime - time interval for write vtk.
 
 vtkpath - path to vtk directory.
 """
-function timesolve!(prob::SPHProblem; batch = 10, timeframe = 1.0, vtkwritetime = 0, vtkpath = nothing, timestepping = false, timelims = (-Inf, +Inf)) 
+function timesolve!(prob::SPHProblem; batch = 10, timeframe = 1.0, vtkwritetime = 0, vtkpath = nothing, pvc = false, timestepping = false, timelims = (-Inf, +Inf)) 
 
     nt = prob.etime + vtkwritetime
     i  = 0
     if vtkwritetime > 0 && !isnothing(vtkpath) 
-        create_vtp_file(joinpath(vtkpath, "OUTPUT_"*lpad(i, 5, "0")), get_points(prob), get_density(prob), get_acceleration(prob), get_velocity(prob))
+        if pvc
+            pvd = paraview_collection(joinpath(vtkpath, "OUTPUT_PVC"))
+            add_timestep(joinpath(vtkpath, "OUTPUT_"*lpad(i, 5, "0")), pvd, prob.etime, get_points(prob), get_density(prob), get_acceleration(prob), get_velocity(prob))
+        else
+            create_vtp_file(joinpath(vtkpath, "OUTPUT_"*lpad(i, 5, "0")), get_points(prob), get_density(prob), get_acceleration(prob), get_velocity(prob))
+        end
     end
     prog = ProgressUnknown(desc = "Calculating...:", spinner=true, showspeed=true)
 
@@ -192,13 +197,20 @@ function timesolve!(prob::SPHProblem; batch = 10, timeframe = 1.0, vtkwritetime 
 
         if vtkwritetime > 0 && !isnothing(vtkpath) && nt < prob.etime
             nt += vtkwritetime
-            create_vtp_file(joinpath(vtkpath, "OUTPUT_"*lpad(i,5,"0")), get_points(prob), get_density(prob), get_acceleration(prob), get_velocity(prob))
+            if pvc
+                add_timestep(joinpath(vtkpath, "OUTPUT_"*lpad(i, 5, "0")), pvd, prob.etime, get_points(prob), get_density(prob), get_acceleration(prob), get_velocity(prob))
+            else
+                create_vtp_file(joinpath(vtkpath, "OUTPUT_"*lpad(i,5,"0")), get_points(prob), get_density(prob), get_acceleration(prob), get_velocity(prob))
+            end
         end
 
         i += 1
         next!(prog, spinner="🌑🌒🌓🌔🌕🌖🌗🌘", showvalues = [(:iter, i), (:time, prob.etime), (:Δt, prob.Δt)])
     end
 
+    if vtkwritetime > 0 && !isnothing(vtkpath)  && pvc
+        vtk_save(pvd)
+    end
     finish!(prog)
 end
 
