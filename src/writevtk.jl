@@ -2,7 +2,7 @@
 
 function create_vtp_file(filename, x, ρ, ∑∂v∂t, v)
     # Convert the particle positions and densities into the format required by the vtk_grid function:
-    ax = Array(x)
+    ax = x
     points = zeros(Float64, 2, length(ax))
     for (i, r) in enumerate(eachcol(points))
         r .= ax[i]
@@ -34,7 +34,7 @@ end
 
 function add_timestep(filename, pvd, time, x, ρ, ∑∂v∂t, v)
 
-    ax = Array(x)
+    ax = x
     points = zeros(Float64, 2, length(ax))
     for (i, r) in enumerate(eachcol(points))
         r .= ax[i]

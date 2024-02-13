@@ -2,28 +2,32 @@ using GPUCellListSPH
 using CSV, DataFrames, CUDA, BenchmarkTools
 using SPHKernels, WriteVTK
 path         = dirname(@__FILE__)
+
+path = joinpath(dirname(pathof(GPUCellListSPH)))
+
+
 fluid_csv    = joinpath(path, "../test/input/FluidPoints_Dp0.02.csv")
 boundary_csv = joinpath(path, "../test/input/BoundaryPoints_Dp0.02.csv")
 
-cpupoints, DF_FLUID, DF_BOUND    = GPUCellListSPH.loadparticles(fluid_csv, boundary_csv)
+cpupoints, DF_FLUID, DF_BOUND    = GPUCellListSPH.loadparticles(fluid_csv, boundary_csv) # Load particles 
 
-dx  = 0.02
-h   = 1.2 * sqrt(2) * dx
-H   = 2h
+dx  = 0.02                  # resolution
+h   = 1.2 * sqrt(2) * dx    # smoothinl length
+H   = 2h                    # kernel support length
 h⁻¹ = 1/h
 H⁻¹ = 1/H
-dist = H
-ρ₀  = 1000.0
+dist = H                    # distance for neighborlist
+ρ₀  = 1000.0                 
 m₀  = ρ₀ * dx * dx
-α   = 0.01
-g   = 9.81
-c₀  = sqrt(g * 2) * 20
-γ   = 7
+α   = 0.01                  # Artificial viscosity constant
+g   = 9.81                  # gravity
+c₀  = sqrt(g * 2) * 20      # Speed of sound
+γ   = 7                     # Gamma costant, used in the pressure equation of state
 Δt  = dt  = 1e-5
-δᵩ  = 0.1
-CFL = 0.2
-cellsize = (H, H)
-sphkernel    = WendlandC2(Float64, 2)
+δᵩ  = 0.1                   # Coefficient for density diffusion
+CFL = 0.2                   # Courant–Friedrichs–Lewy condition for Δt stepping
+cellsize = (H, H)           # cell size
+sphkernel    = WendlandC2(Float64, 2) # SPH kernel from SPHKernels.jl
 
 system  = GPUCellList(cpupoints, cellsize, H)
 N       = length(cpupoints)
@@ -42,14 +46,14 @@ v           = CUDA.fill((0.0, 0.0), length(cpupoints))
 
 sphprob =  SPHProblem(system, h, H, sphkernel, ρ, v, ml, gf, isboundary, ρ₀, m₀, Δt, α, g, c₀, γ, δᵩ, CFL)
 
-prob = sphprob
 # batch - number of iteration until check time and vtp
 # timeframe - simulation time
-# vtkwritetime - write vtp file each interval
-# vtkpath - path to vtp files
-# pcx - make paraview collection
-timesolve!(sphprob; batch = 10, timeframe = 1.0, vtkwritetime = 0.02, vtkpath = "D:/vtk/", pvc = true, timestepping = false)
+# writetime - write vtp file each interval
+# path - path to vtp files
+# pvc - make paraview collection
+timesolve!(sphprob; batch = 10, timeframe = 1.0, writetime = 0.02, path = "D:/vtk/", pvc = true)
 
 # timestepping adjust dt
 # time lims for dt
-timesolve!(sphprob; batch = 10, timeframe = 10.0, vtkwritetime = 0.02, vtkpath = "D:/vtk/", pvc = true, timestepping = true, timelims = (sqrt(eps()), 2e-5)) 
+# now Δt adjust often buggy
+#timesolve!(sphprob; batch = 10, timeframe = 10.0, writetime = 0.02, vtkpath = "D:/vtk/", pvc = true, timestepping = true, timelims = (-Inf, +Inf)) 

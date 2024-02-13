@@ -62,3 +62,5 @@ BenchmarkTools.Trial: 946 samples with 1 evaluation.
 
  Memory estimate: 100.20 KiB, allocs estimate: 1938.
 =#
+
+@benchmark stepsolve!($sphprob, 1; simwl = GPUCellListSPH.Effective())

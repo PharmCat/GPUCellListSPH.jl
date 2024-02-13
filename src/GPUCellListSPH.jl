@@ -2,7 +2,9 @@ module GPUCellListSPH
 
 import Base: show
 
-using CUDA, SPHKernels, CSV, DataFrames, WriteVTK, ProgressMeter, StaticArrays
+using CUDA, SPHKernels, CSV, DataFrames, WriteVTK, ProgressMeter, StaticArrays, Plots
+
+import Plots: Animation
 
 export GPUCellList, update!, partialupdate!, neighborlist
 
@@ -14,5 +16,5 @@ include("structs.jl")
 include("auxillary.jl")
 include("sphproblem.jl")
 include("writevtk.jl")
-
+include("egpukernels.jl")
 end

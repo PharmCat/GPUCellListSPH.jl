@@ -16,6 +16,10 @@ function gravvec(g::T, dim::Int) where T
     (g,)
 end
 
+abstract type SimWorkLoad end
+struct StepByStep <: SimWorkLoad end
+struct Effective  <: SimWorkLoad end
+
 mutable struct SPHProblem
     system::GPUCellList
     dim::Int
@@ -45,11 +49,12 @@ mutable struct SPHProblem
     g::Float64
     c₀::Float64
     γ
+    s::Float64                # surface tension
     δᵩ::Float64
     CFL::Float64
     buf
     etime::Float64
-    function SPHProblem(system, h, H, sphkernel, ρ, v, ml, gf, isboundary, ρ₀::Float64, m₀::Float64, Δt::Float64, α::Float64, g::Float64, c₀::Float64, γ, δᵩ::Float64, CFL::Float64)
+    function SPHProblem(system, h, H, sphkernel, ρ, v, ml, gf, isboundary, ρ₀::Float64, m₀::Float64, Δt::Float64, α::Float64, g::Float64, c₀::Float64, γ, δᵩ::Float64, CFL::Float64; s::Float64 = 0.0)
 
         dim = length(CUDA.@allowscalar first(system.points))
         N   = length(system.points)
@@ -67,7 +72,7 @@ mutable struct SPHProblem
         vΔt½    = CUDA.deepcopy(v)
         xΔt½    = CUDA.deepcopy(system.points)
 
-        new{}(system, dim, h, 1/h, H, 1/H, sphkernel, ∑W, ∑∇W, ∇Wₙ, ∑∂Π∂t, ∑∂v∂t, ∑∂ρ∂t, ρ, ρΔt½, v, vΔt½, xΔt½, ml, gf, isboundary, ρ₀, m₀, Δt, α, g, c₀, γ, δᵩ, CFL, buf, 0.0)
+        new{}(system, dim, h, 1/h, H, 1/H, sphkernel, ∑W, ∑∇W, ∇Wₙ, ∑∂Π∂t, ∑∂v∂t, ∑∂ρ∂t, ρ, ρΔt½, v, vΔt½, xΔt½, ml, gf, isboundary, ρ₀, m₀, Δt, α, g, c₀, γ, s, δᵩ, CFL, buf, 0.0)
     end
 end
 
@@ -80,7 +85,10 @@ timestepping - call Δt_stepping for adjust Δt
 
 timelims - minimal and maximum values for Δt
 """
-function stepsolve!(prob::SPHProblem, n::Int = 1; timecall = nothing, timestepping = false, timelims = (-Inf, +Inf))
+function stepsolve!(prob::SPHProblem, n::Int = 1; simwl::SimWorkLoad = StepByStep(), kwargs...)
+    _stepsolve!(prob, n, simwl;  kwargs...)
+end
+function _stepsolve!(prob::SPHProblem, n::Int, ::StepByStep; timecall = nothing, timestepping = false, timelims = (-Inf, +Inf))
     if timestepping && timelims[1] > timelims[1] error("timelims[1] should be < timelims[2]") end
     for iter = 1:n
 
@@ -109,6 +117,10 @@ function stepsolve!(prob::SPHProblem, n::Int = 1; timecall = nothing, timesteppi
         ∂v∂t!(prob.∑∂v∂t,  prob.∇Wₙ, pairs,  prob.m₀, prob.ρ, prob.c₀, prob.γ, prob.ρ₀) 
         # add gravity and artificial viscosity 
         completed_∂v∂t!(prob.∑∂v∂t, prob.∑∂Π∂t,  gravvec(prob.g, prob.dim), prob.gf) 
+        # add surface tension if s > 0
+        if prob.s > 0
+            ∂v∂tpF!(prob.∑∂v∂t, pairs, x, prob.s, prob.h, prob.m₀, prob.isboundary) 
+        end
         
         # following steps (update_ρ!, update_vp∂v∂tΔt!, update_xpvΔt!) can be done in one kernel 
         # calc ρ at Δt½
@@ -130,6 +142,10 @@ function stepsolve!(prob::SPHProblem, n::Int = 1; timecall = nothing, timesteppi
         ∂v∂t!(prob.∑∂v∂t,  prob.∇Wₙ, pairs,  prob.m₀, prob.ρΔt½, prob.c₀, prob.γ, prob.ρ₀) 
         # add gravity and artificial viscosity 
         completed_∂v∂t!(prob.∑∂v∂t, prob.∑∂Π∂t, gravvec(prob.g, prob.dim), prob.gf)
+        # add surface tension if s > 0
+        if prob.s > 0
+            ∂v∂tpF!(prob.∑∂v∂t, pairs, prob.xΔt½, prob.s, prob.h, prob.m₀, prob.isboundary) 
+        end
         # update all with symplectic position Verlet scheme
         update_all!(prob.ρ, prob.ρΔt½, prob.v, prob.vΔt½, x, prob.xΔt½, prob.∑∂ρ∂t, prob.∑∂v∂t, prob.Δt, prob.ρ₀, prob.isboundary, prob.ml)
    
@@ -169,47 +185,71 @@ function get_dt(prob::SPHProblem)
 end
 
 """
-    timesolve!(prob::SPHProblem; batch = 10, timeframe = 1.0, vtkwritetime = 0, vtkpath = nothing) 
+    timesolve!(prob::SPHProblem; batch = 10, timeframe = 1.0, writetime = 0, path = nothing, pvc = false, timestepping = false, timelims = (-Inf, +Inf), anim = false) 
 
 Make simulation by `batch` iterations within `timeframe`. 
 
-vtkwritetime - time interval for write vtk.
+writetime - time interval for write vtk / animation.
 
-vtkpath - path to vtk directory.
+path - path to export directory.
+
+anim - make animation.
+
+showframe - show animation each frame.
 """
-function timesolve!(prob::SPHProblem; batch = 10, timeframe = 1.0, vtkwritetime = 0, vtkpath = nothing, pvc = false, timestepping = false, timelims = (-Inf, +Inf)) 
+function timesolve!(prob::SPHProblem; batch = 10, timeframe = 1.0, writetime = 0, path = nothing, pvc::Bool = false, timestepping = false, timelims = (-Inf, +Inf), anim::Bool = false, showframe::Bool = true) 
 
-    nt = prob.etime + vtkwritetime
+    nt = prob.etime + writetime
     i  = 0
-    if vtkwritetime > 0 && !isnothing(vtkpath) 
+    if writetime > 0 && !isnothing(path) 
         if pvc
-            pvd = paraview_collection(joinpath(vtkpath, "OUTPUT_PVC"))
-            add_timestep(joinpath(vtkpath, "OUTPUT_"*lpad(i, 5, "0")), pvd, prob.etime, get_points(prob), get_density(prob), get_acceleration(prob), get_velocity(prob))
+            pvd = paraview_collection(joinpath(path, "OUTPUT_PVC"))
+            add_timestep(joinpath(path, "OUTPUT_"*lpad(i, 5, "0")), pvd, prob.etime, get_points(prob), get_density(prob), get_acceleration(prob), get_velocity(prob))
         else
-            create_vtp_file(joinpath(vtkpath, "OUTPUT_"*lpad(i, 5, "0")), get_points(prob), get_density(prob), get_acceleration(prob), get_velocity(prob))
+            create_vtp_file(joinpath(path, "OUTPUT_"*lpad(i, 5, "0")), get_points(prob), get_density(prob), get_acceleration(prob), get_velocity(prob))
         end
     end
     prog = ProgressUnknown(desc = "Calculating...:", spinner=true, showspeed=true)
+
+    if anim
+        animation = Animation()
+    end    
 
     while prob.etime <= timeframe
        
         stepsolve!(prob, batch; timestepping = timestepping, timelims = timelims)
 
-        if vtkwritetime > 0 && !isnothing(vtkpath) && nt < prob.etime
-            nt += vtkwritetime
-            if pvc
-                add_timestep(joinpath(vtkpath, "OUTPUT_"*lpad(i, 5, "0")), pvd, prob.etime, get_points(prob), get_density(prob), get_acceleration(prob), get_velocity(prob))
-            else
-                create_vtp_file(joinpath(vtkpath, "OUTPUT_"*lpad(i,5,"0")), get_points(prob), get_density(prob), get_acceleration(prob), get_velocity(prob))
+        if writetime > 0  && nt < prob.etime
+            nt += writetime
+            cpupoints = Array(get_points(prob))
+            if !isnothing(path)
+                if pvc
+                    add_timestep(joinpath(path, "OUTPUT_"*lpad(i, 5, "0")), pvd, prob.etime, cpupoints, get_density(prob), get_acceleration(prob), get_velocity(prob))
+                else
+                    create_vtp_file(joinpath(path, "OUTPUT_"*lpad(i,5,"0")), get_points(prob), cpupoints, get_acceleration(prob), get_velocity(prob))
+                end
+            end
+            if anim
+                ax = map(x->x[1], cpupoints)
+                ay = map(x->x[2], cpupoints) 
+                p = scatter(ax, ay, leg = false)
+                if showframe display(p) end
+                frame(animation, p)
             end
         end
+
 
         i += 1
         next!(prog, spinner="🌑🌒🌓🌔🌕🌖🌗🌘", showvalues = [(:iter, i), (:time, prob.etime), (:Δt, prob.Δt)])
     end
 
-    if vtkwritetime > 0 && !isnothing(vtkpath)  && pvc
-        vtk_save(pvd)
+    if writetime > 0 && !isnothing(path) 
+        if pvc
+            vtk_save(pvd)
+        end
+        if anim
+            gif(animation, joinpath(path, "anim_output_fps30.gif"), fps = Int(ceil(1/writetime)))
+        end
     end
     finish!(prog)
 end

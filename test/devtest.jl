@@ -605,3 +605,14 @@ function kernel_∂ρ∂tDDT!(∑∂ρ∂t,  ∇Wₙ, pairs, points, h, m₀, δ
     end
     return nothing
 end
+
+using Plots
+
+anim = Animation();
+
+p = plot([sin, cos], zeros(0), leg = false, xlims = (0, 2π), ylims = (-1, 1));
+
+
+frame(anim)
+
+display(p)
