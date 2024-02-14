@@ -11,7 +11,7 @@ function kernel_cellmap_2d!(pcell, cellpnum, points,  h⁻¹, offset)
         pᵢ₁ = ceil(Int32, min(max(p₁, 1), csᵢ)) 
         pᵢ₂ = ceil(Int32, min(max(p₂, 1), csⱼ))
         # maybe add check:  is particle in simulation range? and include only if in simulation area
-        @inbounds pcell[i] = (pᵢ₁, pᵢ₂)
+        pcell[i] = (pᵢ₁, pᵢ₂)
 
         CUDA.@atomic cellpnum[pᵢ₁, pᵢ₂] += one(Int32) 
     end
@@ -132,16 +132,17 @@ function kernel_neib_internal_2d!(pairs, cnt, cellpnum, points, celllist, dist)
     #indexₖ = (blockIdx().z - Int32(1)) * blockDim().z + threadIdx().z
     Nx, Ny = size(cellpnum)
     if indexᵢ <= Nx && indexⱼ <= Ny && cellpnum[indexᵢ, indexⱼ] > 1 
-        @inbounds len = cellpnum[indexᵢ, indexⱼ]
+        len = cellpnum[indexᵢ, indexⱼ]
         for i = 1:len - 1
-            @inbounds indi = celllist[i, indexᵢ, indexⱼ]
+            indi = celllist[i, indexᵢ, indexⱼ]
             for j = i + 1:len
-                @inbounds indj = celllist[j, indexᵢ, indexⱼ]
-                @inbounds distance = sqrt((points[indi][1] - points[indj][1])^2 + (points[indi][2] - points[indj][2])^2)
+                indj = celllist[j, indexᵢ, indexⱼ]
+                distance = sqrt((points[indi][1] - points[indj][1])^2 + (points[indi][2] - points[indj][2])^2)
                 if distance < dist
                     n = CUDA.@atomic cnt[1] += 1
-                    if n <= size(pairs, 1)
-                        @inbounds  pairs[n + 1] = tuple(indi, indj, distance)
+                    n += 1 
+                    if n <= legth(pairs)
+                        pairs[n] = tuple(indi, indj, distance)
                     end
                 end
             end
@@ -181,11 +182,12 @@ function kernel_neib_external_2d!(pairs, cnt, cellpnum, points, celllist,  offse
         jinds = view(celllist, 1:cellpnum[neibcellᵢ, neibcellⱼ], neibcellᵢ, neibcellⱼ)
         for i in iinds
             for j in jinds
-                @inbounds  distance = sqrt((points[i][1] - points[j][1])^2 + (points[i][2] - points[j][2])^2)
+                distance = sqrt((points[i][1] - points[j][1])^2 + (points[i][2] - points[j][2])^2)
                 if distance < dist
                     n = CUDA.@atomic cnt[1] += 1
-                    if n <= size(pairs, 1)
-                        @inbounds pairs[n + 1] = tuple(i, j, distance)
+                    n +=1
+                    if n <= length(pairs)
+                        pairs[n] = tuple(i, j, distance)
                     end
                 end
             end  
@@ -297,7 +299,6 @@ function kernel_∂ρ∂tDDT!(∑∂ρ∂t,  ∇Wₙ, pairs, points, h, m₀, δ
             xⱼ    = points[pⱼ]
             Δx    = (xᵢ[1] - xⱼ[1], xᵢ[2] - xⱼ[2])
             r²    = Δx[1]^2 + Δx[2]^2 
-            
             # for timestep Δt½ d != actual range
             # one way - not calculate values out of 2h
             # if r² > (2h)^2 return nothing end
@@ -308,20 +309,17 @@ function kernel_∂ρ∂tDDT!(∑∂ρ∂t,  ∇Wₙ, pairs, points, h, m₀, δ
             Cb    = (c₀ * c₀ * ρ₀) * γ⁻¹
             DDTgz = ρ₀ * g / Cb
             DDTkh = 2 * h * δᵩ
-    
             #=
             Cb = (c₀ * c₀ * ρ₀) * γ⁻¹
             Pᴴ =  ρ₀ * g * z
             ᵸᵀᴴ
             =#
-
             ρᵢ    = ρ[pᵢ]
             ρⱼ    = ρ[pⱼ]
 
             Δv    = (v[pᵢ][1] - v[pⱼ][1], v[pᵢ][2] - v[pⱼ][2])
 
-            ∇Wᵢ   = ∇Wₙ[index]
-
+            ∇W   = ∇Wₙ[index]
             #=
             z  = Δx[2]
             Cb = (c₀ * c₀ * ρ₀) * γ⁻¹
@@ -329,8 +327,7 @@ function kernel_∂ρ∂tDDT!(∑∂ρ∂t,  ∇Wₙ, pairs, points, h, m₀, δ
             ρᴴ =  ρ₀ * (((Pᴴ + 1)/Cb)^γ⁻¹ - 1)
             ψ  = 2 * (ρᵢ - ρⱼ) * Δx / r²
             =#
-            
-            dot3  = -(Δx[1] * ∇Wᵢ[1] + Δx[2] * ∇Wᵢ[2]) #  - Δx ⋅ ∇Wᵢ 
+            dot3  = -(Δx[1] * ∇W[1] + Δx[2] * ∇W[2]) #  - Δx ⋅ ∇W
 
             # as actual range at timestep Δt½  may be greateg  - some problems can be here
             if 1 + DDTgz * Δx[2] < 0 || 1 - DDTgz * Δx[2] < 0 return nothing end
@@ -343,11 +340,33 @@ function kernel_∂ρ∂tDDT!(∑∂ρ∂t,  ∇Wₙ, pairs, points, h, m₀, δ
             visc_densi = DDTkh * c₀ * (ρᵢ - ρⱼ - drhopvn) / (r² + η²)
             delta_j    = visc_densi * dot3 * m₀ / ρᵢ
 
-            m₀dot     = m₀ * (Δv[1] * ∇Wᵢ[1] + Δv[2] * ∇Wᵢ[2])  #  Δv ⋅ ∇Wᵢ
+            m₀dot     = m₀ * (Δv[1] * ∇W[1] + Δv[2] * ∇W[2])  #  Δv ⋅ ∇W
+            #=
+            if isnan(delta_j) || isnan(m₀dot)  || isnan(ρᵢ) || isnan(ρⱼ) 
+                @cuprintln "kernel_DDT 1 isnan dx1 = $(Δx[1]) , dx2 = $(Δx[2]) rhoi = $ρᵢ , dot3 = $dot3 , visc_densi = $visc_densi drhopvn = $drhopvn $(∇W[1]) $(Δv[1])"
+                error() 
+            end
+            if isinf(delta_j) || isinf(m₀dot)  || isinf(delta_i) 
+                @cuprintln "kernel_DDT 2 inf: dx1 = $(Δx[1]) , dx2 = $(Δx[2]) rhoi = $ρᵢ , rhoj = $ρⱼ , dot3 = $dot3 ,  delta_i = $delta_i , delta_j = $delta_j , drhopvn = $drhopvn , visc_densi = $visc_densi , $(∇W[1]) , $(Δv[1])"
+                error() 
+            end
+            =#
+            #mlfac = MotionLimiter[pᵢ] * MotionLimiter[pⱼ]
+            ∑∂ρ∂ti = m₀dot + delta_i *  MotionLimiter[pᵢ]
+            ∑∂ρ∂tj = m₀dot + delta_j *  MotionLimiter[pⱼ]
+            ∑∂ρ∂tval1 = CUDA.@atomic ∑∂ρ∂t[pᵢ] += ∑∂ρ∂ti
+            ∑∂ρ∂tval2 = CUDA.@atomic ∑∂ρ∂t[pⱼ] += ∑∂ρ∂tj
+            #=
+            if isnan(ρᵢ) || iszero(ρᵢ) || ρᵢ < 0.001 || isnan(ρⱼ) || iszero(ρⱼ) || ρⱼ < 0.001
+                @cuprintln "kernel DDT rho index =  $index , rhoi = $ρᵢ , rhoi = $ρⱼ, dx = $Δx , r =  $r², val1 = $∑∂ρ∂tval1 ,   val2 = $∑∂ρ∂tval2 , pair = $pair"
+                error() 
+            end
 
-            CUDA.@atomic ∑∂ρ∂t[pᵢ] += (m₀dot + delta_i * MotionLimiter[pᵢ])
-            CUDA.@atomic ∑∂ρ∂t[pⱼ] += (m₀dot + delta_j * MotionLimiter[pⱼ])
-            
+            if isnan(∑∂ρ∂tval1) || isnan(∑∂ρ∂tval2)
+                @cuprintln "kernel DDT 3 val1 = $(∑∂ρ∂tval1), val2 = $(∑∂ρ∂tval2), dx1 = $(Δx[1]) , dx2 = $(Δx[2]) rhoi = $ρᵢ , dot3 = $dot3 , visc_densi = $visc_densi drhopvn = $drhopvn $(∇W[1]) $(Δv[1])"
+                error() 
+            end
+            =#
         end
     end
     return nothing
@@ -382,16 +401,18 @@ function kernel_∂Π∂t!(∑∂Π∂t, ∇Wₙ, pairs, points, h, ρ, α, v, c
             xⱼ    = points[pⱼ]
             Δx    = (xᵢ[1] - xⱼ[1], xᵢ[2] - xⱼ[2])
             r²    = Δx[1]^2 + Δx[2]^2 
-
             # for timestep Δt½ d != actual range
             # one way - not calculate values out of 2h
             # if r² > (2h)^2 return nothing end
-
             η²    = (0.1 * h) * (0.1 * h)
-            
             ρᵢ    = ρ[pᵢ]
             ρⱼ    = ρ[pⱼ]
-            
+            #=
+            if isnan(ρᵢ) || iszero(ρᵢ) || ρᵢ < 0.001 || isnan(ρⱼ) || iszero(ρⱼ) || ρⱼ < 0.001
+                @cuprintln "kernel Π index =  $index , rhoi = $ρᵢ , rhoi = $ρⱼ, dx = $Δx , r =  $r², pair = $pair"
+                error() 
+            end
+            =#
             Δv    = (v[pᵢ][1] - v[pⱼ][1], v[pᵢ][2] - v[pⱼ][2])
 
             ρₘ    = (ρᵢ + ρⱼ) * 0.5
@@ -407,7 +428,12 @@ function kernel_∂Π∂t!(∑∂Π∂t, ∇Wₙ, pairs, points, h, ρ, α, v, c
                 ΔΠ   =  (-α * c₀ * Δμ) / ρₘ
 
                 ΔΠm₀∇W = (-ΔΠ * m₀ * ∇W[1], -ΔΠ * m₀ * ∇W[2])
-
+                #=
+                if isnan(ΔΠm₀∇W[1])
+                    @cuprintln "kernel Π: Π = $ΔΠ ,  W = $(∇W[1])"
+                    error() 
+                end
+                =#
                 CUDA.@atomic ∑∂Π∂t[pᵢ, 1] += ΔΠm₀∇W[1]
                 CUDA.@atomic ∑∂Π∂t[pᵢ, 2] += ΔΠm₀∇W[2]
                 CUDA.@atomic ∑∂Π∂t[pⱼ, 1] -= ΔΠm₀∇W[1]
@@ -454,7 +480,12 @@ function kernel_∂v∂t!(∑∂v∂t,  ∇Wₙ,  pairs, m, ρ, c₀, γ, ρ₀)
 
             ρᵢ    = ρ[pᵢ]
             ρⱼ    = ρ[pⱼ]
-
+            #=
+            if isnan(ρᵢ) || iszero(ρᵢ) || ρᵢ < 0.001 || isnan(ρⱼ) || iszero(ρⱼ) || ρⱼ < 0.001
+                @cuprintln "kernel update rho: index =  $index , rhoi = $ρᵢ , rhoi = $ρⱼ, dpdt =  $(∑∂v∂t[index]), pair = $pair"
+                error() 
+            end
+            =#
             Pᵢ    = pressure(ρᵢ, c₀, γ, ρ₀)
             Pⱼ    = pressure(ρⱼ, c₀, γ, ρ₀)
             ∇W    = ∇Wₙ[index]
@@ -462,7 +493,12 @@ function kernel_∂v∂t!(∑∂v∂t,  ∇Wₙ,  pairs, m, ρ, c₀, γ, ρ₀)
             Pfac  = (Pᵢ + Pⱼ) / (ρᵢ * ρⱼ)
 
             ∂v∂t  = (- m * Pfac * ∇W[1], - m * Pfac * ∇W[2])
-
+            
+            if isnan(∂v∂t[1])
+                @cuprintln "kernel dvdt: rhoi = $ρᵢ , Pi =  $Pᵢ , m = $m , Pfac = $Pfac , W1 = $(∇W[1])"
+                error() 
+            end
+            
             CUDA.@atomic ∑∂v∂t[pᵢ, 1] +=  ∂v∂t[1]
             CUDA.@atomic ∑∂v∂t[pᵢ, 2] +=  ∂v∂t[2]
             CUDA.@atomic ∑∂v∂t[pⱼ, 1] -=  ∂v∂t[1]
@@ -520,6 +556,12 @@ function kernel_update_ρ!(ρ, ∑∂ρ∂t, Δt, ρ₀, isboundary)
     if index <= length(ρ)
         ρval = ρ[index] + ∑∂ρ∂t[index] * Δt
         if ρval < ρ₀ && isboundary[index] ρval = ρ₀ end
+        #=
+        if isnan(ρval) || iszero(ρval) || ρval < 0.001
+            @cuprintln "kernel update rho: index =  $index , rhoval = $ρval  ,rhoi = $(ρ[index]) , dpdt =  $(∑∂ρ∂t[index]), dt = $Δt , isboundary = $(isboundary[index])"
+            error() 
+        end
+        =#
         ρ[index] = ρval
     end
     return nothing
@@ -543,8 +585,14 @@ end
 function kernel_update_vp∂v∂tΔt!(v, ∑∂v∂t, Δt, ml) 
     index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
     if index <= size(∑∂v∂t, 1)
-        @inbounds val = v[index]
-        @inbounds v[index] = (val[1] + ∑∂v∂t[index, 1] * Δt * ml[index], val[2] + ∑∂v∂t[index, 2] * Δt * ml[index])
+        val = v[index]
+        v[index] = (val[1] + ∑∂v∂t[index, 1] * Δt * ml[index], val[2] + ∑∂v∂t[index, 2] * Δt * ml[index])
+        #=
+        if isnan(v[index][1] )
+            @cuprintln "kernel update v by dvdvt: val = $(val[1]) , dvdt =  $(∑∂v∂t[index, 1] ), dt =  $Δt"
+            error() 
+        end
+        =#
     end
     return nothing
 end
@@ -571,6 +619,12 @@ function kernel_update_xpvΔt!(x, v, Δt, ml)
         xval = x[index]
         vval = v[index]
         x[index] = (xval[1] + vval[1] * Δt, xval[2] + vval[2] * Δt)
+        #=
+        if isnan(x[index][1] )
+            @cuprintln "kernel dxdt: xval =  $(xval[1]) , vval =  $(vval[1]),  dt = $Δt"
+            error() 
+        end
+        =#
     end
     return nothing
 end
@@ -591,22 +645,44 @@ function update_xpvΔt!(x, v, Δt, ml)
 end
 #####################################################################
 
-function kernel_update_all!(ρ, ρΔt½, v, vΔt½, x, xΔt½, ∑∂ρ∂t, ∑∂v∂t,  Δt, ρ₀, isboundary, ml) # << rename
+function kernel_update_all!(ρ, ρΔt½, v, vΔt½, x, xΔt½, ∑∂ρ∂t, ∑∂v∂t,  Δt, cΔx, ρ₀, isboundary, ml) # << rename
     index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
     if index <= length(x)
 
         epsi       = -(∑∂ρ∂t[index] / ρΔt½[index]) * Δt
         ρval       = ρ[index]  * (2 - epsi)/(2 + epsi)
         if ρval < ρ₀ && isboundary[index] ρval = ρ₀ end
-        
-        ρΔt½[index] = ρ[index] = ρval
 
+        #=
+        if isnan(ρval) || iszero(ρval) || ρval < 0.01
+            @cuprintln "kernel update all rho: rhova = $ρval , epsi = $epsi , drhodt = $(∑∂ρ∂t[index]) , rhot12 = $(ρΔt½[index]) $Δt"
+            error() 
+        end
+        =#
+        ρΔt½[index] = ρval
+        ρ[index]    = ρval
+        #=
+        if ρΔt½[index] < 0.01
+            @cuprintln "kernel update all rho 1: rhova = $ρval , epsi = $epsi , drhodt = $(∑∂ρ∂t[index]) , rhot12 = $(ρΔt½[index]) $Δt"
+            error() 
+        end
+        if ρ[index]  < 0.01
+            @cuprintln "kernel update all rho 1: rhova = $ρval , epsi = $epsi , drhodt = $(∑∂ρ∂t[index]) , rhot12 = $(ρΔt½[index]) $Δt"
+            error() 
+        end
+        =#
         vval = v[index]
-        nval = vΔt½[index] = v[index] = (vval[1] + ∑∂v∂t[index, 1] * Δt * ml[index], vval[2] + ∑∂v∂t[index, 2] * Δt * ml[index])
+        nval = (vval[1] + ∑∂v∂t[index, 1] * Δt * ml[index], vval[2] + ∑∂v∂t[index, 2] * Δt * ml[index])
+        vΔt½[index] = nval
+        v[index] = nval
 
         xval = x[index]
-        xΔt½[index] = x[index] = (xval[1] + (vval[1] + nval[1]) * 0.5  * Δt, xval[2] + (vval[2] + nval[2]) * 0.5  * Δt)
-    
+        Δxˣ, Δxʸ  = (vval[1] + nval[1]) * 0.5  * Δt, (vval[2] + nval[2]) * 0.5  * Δt
+        cΔx[1][index]  += Δxˣ
+        cΔx[2][index]  += Δxʸ
+        xval = (xval[1] + Δxˣ, xval[2] + Δxʸ)
+        xΔt½[index] = xval
+        x[index] = xval
     end
     return nothing
 end
@@ -616,15 +692,15 @@ end
 
 
 """
-function update_all!(ρ, ρΔt½, v, vΔt½, x, xΔt½, ∑∂ρ∂t, ∑∂v∂t,  Δt, ρ₀, isboundary, ml) 
+function update_all!(ρ, ρΔt½, v, vΔt½, x, xΔt½, ∑∂ρ∂t, ∑∂v∂t,  Δt, cΔx, ρ₀, isboundary, ml) 
     if length(x) != length(v) error("Wrong length") end
-    gpukernel = @cuda launch=false kernel_update_all!(ρ, ρΔt½, v, vΔt½, x, xΔt½, ∑∂ρ∂t, ∑∂v∂t,  Δt, ρ₀, isboundary, ml) 
+    gpukernel = @cuda launch=false kernel_update_all!(ρ, ρΔt½, v, vΔt½, x, xΔt½, ∑∂ρ∂t, ∑∂v∂t,  Δt, cΔx, ρ₀, isboundary, ml) 
     config = launch_configuration(gpukernel.fun)
     Nx = length(x)
     maxThreads = config.threads
     Tx  = min(maxThreads, Nx)
     Bx = cld(Nx, Tx)
-    CUDA.@sync gpukernel(ρ, ρΔt½, v, vΔt½, x, xΔt½, ∑∂ρ∂t, ∑∂v∂t,  Δt, ρ₀, isboundary, ml; threads = Tx, blocks = Bx)
+    CUDA.@sync gpukernel(ρ, ρΔt½, v, vΔt½, x, xΔt½, ∑∂ρ∂t, ∑∂v∂t,  Δt, cΔx, ρ₀, isboundary, ml; threads = Tx, blocks = Bx)
 end
 
 #####################################################################
@@ -653,6 +729,7 @@ function Δt_stepping(buf, a, v, points, c₀, h, CFL, timelims)
 
     # some problems can be here if we have cells with big acceleration 
     # may be include only particles that only in simulation range
+
     η²  = (0.01)h * (0.01)h
 
     gpukernel = @cuda launch=false kernel_Δt_stepping_norm!(buf, a) 
@@ -663,7 +740,7 @@ function Δt_stepping(buf, a, v, points, c₀, h, CFL, timelims)
     Bx = cld(Nx, Tx)
     CUDA.@sync gpukernel(buf, a; threads = Tx, blocks = Bx)
 
-    dt1 = sqrt(h / maximum(buf))
+    dt1 = sqrt(h / 3maximum(buf)) # mul 1/3
 
     gpukernel = @cuda launch=false kernel_Δt_stepping!(buf, v, points, h, η²) 
     config = launch_configuration(gpukernel.fun)

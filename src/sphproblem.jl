@@ -54,6 +54,8 @@ mutable struct SPHProblem
     CFL::Float64
     buf
     etime::Float64
+    cΔx
+    nui::Float64
     function SPHProblem(system, h, H, sphkernel, ρ, v, ml, gf, isboundary, ρ₀::Float64, m₀::Float64, Δt::Float64, α::Float64, g::Float64, c₀::Float64, γ, δᵩ::Float64, CFL::Float64; s::Float64 = 0.0)
 
         dim = length(CUDA.@allowscalar first(system.points))
@@ -71,8 +73,8 @@ mutable struct SPHProblem
         ρΔt½    = CUDA.deepcopy(ρ)
         vΔt½    = CUDA.deepcopy(v)
         xΔt½    = CUDA.deepcopy(system.points)
-
-        new{}(system, dim, h, 1/h, H, 1/H, sphkernel, ∑W, ∑∇W, ∇Wₙ, ∑∂Π∂t, ∑∂v∂t, ∑∂ρ∂t, ρ, ρΔt½, v, vΔt½, xΔt½, ml, gf, isboundary, ρ₀, m₀, Δt, α, g, c₀, γ, s, δᵩ, CFL, buf, 0.0)
+        cΔx     = Tuple(CUDA.zeros(Float64, N) for n in 1:dim)
+        new{}(system, dim, h, 1/h, H, 1/H, sphkernel, ∑W, ∑∇W, ∇Wₙ, ∑∂Π∂t, ∑∂v∂t, ∑∂ρ∂t, ρ, ρΔt½, v, vΔt½, xΔt½, ml, gf, isboundary, ρ₀, m₀, Δt, α, g, c₀, γ, s, δᵩ, CFL, buf, 0.0, cΔx, minimum(system.cs) - H)
     end
 end
 
@@ -88,13 +90,24 @@ timelims - minimal and maximum values for Δt
 function stepsolve!(prob::SPHProblem, n::Int = 1; simwl::SimWorkLoad = StepByStep(), kwargs...)
     _stepsolve!(prob, n, simwl;  kwargs...)
 end
-function _stepsolve!(prob::SPHProblem, n::Int, ::StepByStep; timecall = nothing, timestepping = false, timelims = (-Inf, +Inf))
+function _stepsolve!(prob::SPHProblem, n::Int, ::StepByStep; timecall = nothing, timestepping = false, timelims = (sqrt(eps()), prob.CFL * prob.H /3prob.c₀))
     if timestepping && timelims[1] > timelims[1] error("timelims[1] should be < timelims[2]") end
-    for iter = 1:n
 
-        update!(prob.system)
-        x     = prob.system.points
-        pairs = neighborlist(prob.system)
+    x              = prob.system.points
+    pairs          = neighborlist(prob.system)
+    updatepairs    = true
+    skipupdate     = 0
+    maxskipupdate  = 0
+    for iter = 1:n
+        if updatepairs
+            update!(prob.system)
+            x           = prob.system.points
+            pairs       = neighborlist(prob.system)
+            for a in prob.cΔx fill!(a, zero(Float64)) end
+            updatepairs = false
+            maxskipupdate = max(maxskipupdate, skipupdate - 1)
+            skipupdate  = 0
+        end
 
         fill!(prob.∑W, zero(Float64))
         fill!(prob.∑∂ρ∂t, zero(Float64))
@@ -147,16 +160,21 @@ function _stepsolve!(prob::SPHProblem, n::Int, ::StepByStep; timecall = nothing,
             ∂v∂tpF!(prob.∑∂v∂t, pairs, prob.xΔt½, prob.s, prob.h, prob.m₀, prob.isboundary) 
         end
         # update all with symplectic position Verlet scheme
-        update_all!(prob.ρ, prob.ρΔt½, prob.v, prob.vΔt½, x, prob.xΔt½, prob.∑∂ρ∂t, prob.∑∂v∂t, prob.Δt, prob.ρ₀, prob.isboundary, prob.ml)
-   
+        update_all!(prob.ρ, prob.ρΔt½, prob.v, prob.vΔt½, x, prob.xΔt½, prob.∑∂ρ∂t, prob.∑∂v∂t, prob.Δt, prob.cΔx, prob.ρ₀, prob.isboundary, prob.ml)
+        
+        if maximum(maximum.(prob.cΔx)) > 0.9 * prob.nui  
+            updatepairs = true 
+        end
 
         prob.etime += prob.Δt
 
         if timestepping
             prob.Δt = Δt_stepping(prob.buf, prob.∑∂v∂t, prob.v, x, prob.c₀, prob.h, prob.CFL, timelims)
         end
- 
+
+        skipupdate += 1
     end
+    maxskipupdate
 end
 
 
@@ -215,9 +233,11 @@ function timesolve!(prob::SPHProblem; batch = 10, timeframe = 1.0, writetime = 0
         animation = Animation()
     end    
 
+    local diaginf
+    
     while prob.etime <= timeframe
        
-        stepsolve!(prob, batch; timestepping = timestepping, timelims = timelims)
+        diaginf = stepsolve!(prob, batch; timestepping = timestepping, timelims = timelims)
 
         if writetime > 0  && nt < prob.etime
             nt += writetime
@@ -238,9 +258,8 @@ function timesolve!(prob::SPHProblem; batch = 10, timeframe = 1.0, writetime = 0
             end
         end
 
-
         i += 1
-        next!(prog, spinner="🌑🌒🌓🌔🌕🌖🌗🌘", showvalues = [(:iter, i), (:time, prob.etime), (:Δt, prob.Δt)])
+        next!(prog, spinner="🌑🌒🌓🌔🌕🌖🌗🌘", showvalues = [(:iter, i), (:time, prob.etime), (:Δt, prob.Δt), (:msu, diaginf)])
     end
 
     if writetime > 0 && !isnothing(path) 

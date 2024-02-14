@@ -128,7 +128,20 @@ function update!(c::GPUCellList)
     neib_external_2d!(c.pairs, c.cnt, c.cellpnum, c.points, c.celllist,  (1,  1), c.dist)
     neib_external_2d!(c.pairs, c.cnt, c.cellpnum, c.points, c.celllist,  (1,  0), c.dist)
 
-    c.pairsn = CUDA.@allowscalar c.cnt[1]  
+    CUDA.@allowscalar c.pairsn = c.cnt[1]  
+
+    if c.pairsn > length(c.pairs)
+        fill!(c.cnt, zero(Int32))
+        CUDA.unsafe_free!(c.pairs)
+        c.pairs    = CUDA.fill((zero(Int32), zero(Int32), NaN), Int(ceil(c.pairsn/0.8))) 
+        neib_internal_2d!(c.pairs, c.cnt, c.cellpnum, c.points, c.celllist, c.dist)
+        neib_external_2d!(c.pairs, c.cnt, c.cellpnum, c.points, c.celllist,  (1, -1), c.dist)
+        neib_external_2d!(c.pairs, c.cnt, c.cellpnum, c.points, c.celllist,  (0,  1), c.dist)
+        neib_external_2d!(c.pairs, c.cnt, c.cellpnum, c.points, c.celllist,  (1,  1), c.dist)
+        neib_external_2d!(c.pairs, c.cnt, c.cellpnum, c.points, c.celllist,  (1,  0), c.dist)
+
+        CUDA.@allowscalar c.pairsn = c.cnt[1]  
+    end
 end
 
 """

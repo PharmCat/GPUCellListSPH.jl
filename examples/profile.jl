@@ -1,6 +1,8 @@
 using GPUCellListSPH
 using CSV, DataFrames, CUDA, BenchmarkTools
 using SPHKernels, WriteVTK
+using Profile
+using PProf
 path         = dirname(@__FILE__)
 fluid_csv    = joinpath(path, "../test/input/FluidPoints_Dp0.02.csv")
 boundary_csv = joinpath(path, "../test/input/BoundaryPoints_Dp0.02.csv")
@@ -36,31 +38,12 @@ v           = CUDA.fill((0.0, 0.0), length(cpupoints))
 
 sphprob =  SPHProblem(system, h, H, sphkernel, ρ, v, ml, gf, isboundary, ρ₀, m₀, Δt, α, g, c₀, γ, δᵩ, CFL)
 
-stepsolve!(sphprob, 1000)
 
+stepsolve!(sphprob, 1)
 
-get_points(sphprob)
+@profile  stepsolve!(sphprob, 10000)
 
-get_velocity(sphprob)
+pprof()
 
-get_density(sphprob)
-
-get_acceleration(sphprob)
-
-
-@benchmark stepsolve!($sphprob, 1)
-
-#=
-BenchmarkTools.Trial: 946 samples with 1 evaluation.
- Range (min … max):  4.714 ms … 42.996 ms  ┊ GC (min … max): 0.00% … 54.74%
- Time  (median):     5.193 ms              ┊ GC (median):    0.00%
- Time  (mean ± σ):   5.284 ms ±  1.250 ms  ┊ GC (mean ± σ):  0.47% ±  1.78%
-
-               ▁▃▄▄█▅▆▄▅▂▃▃▁▁
-  ▂▁▁▂▂▂▃▄▄▄▄▇▇███████████████▇▅▅▅▄▄▄▄▃▄▄▃▃▄▄▄▃▃▃▂▃▃▃▂▂▂▃▃▃▂ ▄
-  4.71 ms        Histogram: frequency by time        6.04 ms <
-
- Memory estimate: 100.20 KiB, allocs estimate: 1938.
-=#
-
-@benchmark stepsolve!($sphprob, 1; simwl = GPUCellListSPH.Effective())
+PProf.kill()
+Profile.clear()
