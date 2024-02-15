@@ -56,4 +56,4 @@ timesolve!(sphprob; batch = 10, timeframe = 1.0, writetime = 0.02, path = "D:/vt
 # timestepping adjust dt
 # time lims for dt
 # now Δt adjust often buggy
-#timesolve!(sphprob; batch = 10, timeframe = 10.0, writetime = 0.02, vtkpath = "D:/vtk/", pvc = true, timestepping = true, timelims = (-Inf, +Inf)) 
+timesolve!(sphprob; batch = 20, timeframe = 10.0, writetime = 0.02, vtkpath = "D:/vtk/", pvc = true, timestepping = true) 

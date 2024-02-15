@@ -141,7 +141,7 @@ function kernel_neib_internal_2d!(pairs, cnt, cellpnum, points, celllist, dist)
                 if distance < dist
                     n = CUDA.@atomic cnt[1] += 1
                     n += 1 
-                    if n <= legth(pairs)
+                    if n <= length(pairs)
                         pairs[n] = tuple(indi, indj, distance)
                     end
                 end
