@@ -13,8 +13,8 @@ H   = 2h
 h⁻¹ = 1/h
 H⁻¹ = 1/H
 dist = H
-cellsize = (H, H)
+cellsize = (dist, dist)
 
-system  = GPUCellList(cpupoints, cellsize, H)
+system  = GPUCellList(cpupoints, cellsize, dist)
 
 update!(system)

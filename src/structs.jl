@@ -28,6 +28,14 @@ function GPUCellList(points, cellsize, dist; mppcell = 0, mpairs = 0)
     pvec  = CUDA.zeros(Int32, N)                                # vector for sorting method fillcells_psort_2d!
     cs1 = cellsize[1]                                           # cell size by 1-dim
     cs2 = cellsize[2]                                           # cell size by 2-dim 
+    if cs1 < dist 
+        @warn "Cell size 1 < dist, cell size set to dist"
+         cs1 = dist 
+    end
+    if cs2 < dist 
+        @warn "Cell size 2 < dist, cell size set to dist"
+        cs2 = dist 
+    end
     MIN1   = minimum(x->x[1], points)                           # minimal value 
     MIN1   = MIN1 - abs((MIN1 + sqrt(eps())) * sqrt(eps()))     # minimal value 1-dim (a lillte bil less for better cell fitting)
     MAX1   = maximum(x->x[1], points)                           # maximum 1-dim
@@ -84,7 +92,7 @@ function GPUCellList(points, cellsize, dist; mppcell = 0, mpairs = 0)
         CUDA.unsafe_free!(pairs)
         pairs      = new_pairs
     end
-    GPUCellList(N, dist, cellsize, (MIN1, MIN2), (CELL1, CELL2), points, pcell, pvec, cellpnum, cnt, celllist, pairs, total_pairs)
+    GPUCellList(N, dist, (cs1, cs2), (MIN1, MIN2), (CELL1, CELL2), points, pcell, pvec, cellpnum, cnt, celllist, pairs, total_pairs)
 end
 
 """

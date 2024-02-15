@@ -16,7 +16,7 @@ h   = 1.2 * sqrt(2) * dx    # smoothinl length
 H   = 2h                    # kernel support length
 h⁻¹ = 1/h
 H⁻¹ = 1/H
-dist = H                    # distance for neighborlist
+dist = 1.2H                    # distance for neighborlist
 ρ₀  = 1000.0                 
 m₀  = ρ₀ * dx * dx
 α   = 0.01                  # Artificial viscosity constant
@@ -26,10 +26,10 @@ c₀  = sqrt(g * 2) * 20      # Speed of sound
 Δt  = dt  = 1e-5
 δᵩ  = 0.1                   # Coefficient for density diffusion
 CFL = 0.2                   # Courant–Friedrichs–Lewy condition for Δt stepping
-cellsize = (1.2*H, 1.2*H)           # cell size
+cellsize = (dist, dist)           # cell size
 sphkernel    = WendlandC2(Float64, 2) # SPH kernel from SPHKernels.jl
 
-system  = GPUCellList(cpupoints, cellsize, H)
+system  = GPUCellList(cpupoints, cellsize, dist)
 N       = length(cpupoints)
 ρ       = CUDA.zeros(Float64, N)
 copyto!(ρ, Array([DF_FLUID.Rhop;DF_BOUND.Rhop]))
@@ -51,9 +51,9 @@ sphprob =  SPHProblem(system, h, H, sphkernel, ρ, v, ml, gf, isboundary, ρ₀,
 # writetime - write vtp file each interval
 # path - path to vtp files
 # pvc - make paraview collection
-timesolve!(sphprob; batch = 10, timeframe = 1.0, writetime = 0.02, path = "D:/vtk/", pvc = true)
+timesolve!(sphprob; batch = 10, timeframe = 2.0, writetime = 0.025, path = "D:/vtk/", pvc = true)
 
 # timestepping adjust dt
 # time lims for dt
 # now Δt adjust often buggy
-timesolve!(sphprob; batch = 50, timeframe = 10.0, writetime = 0.02, path = "D:/vtk/", pvc = true, timestepping = true) 
+#timesolve!(sphprob; batch = 50, timeframe = 3.5, writetime = 0.01, path = "D:/vtk/", pvc = true, timestepping = true, timelims = (eps(), 1e-5)) 

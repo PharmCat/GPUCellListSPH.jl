@@ -616,3 +616,21 @@ p = plot([sin, cos], zeros(0), leg = false, xlims = (0, 2π), ylims = (-1, 1));
 frame(anim)
 
 display(p)
+
+
+expdict    = Dict()
+cpupoints               = Array(get_points(sphprob))
+coordsarr               = [map(x -> x[i], cpupoints) for i in 1:length(first(cpupoints))]
+expdict["Density"]      = Array(get_density(sphprob))
+expdict["Pressure"]     = Array(get_pressure(sphprob))
+expdict["Acceleration"] = permutedims(Array(get_acceleration(sphprob)))
+expdict["Velocity"]     = permutedims(hcat([map(x -> x[i],   Array(get_velocity(sphprob))) for i in 1:length(first(  get_velocity(sphprob)))]...))
+polys = empty(MeshCell{WriteVTK.PolyData.Polys,UnitRange{Int64}}[])
+verts = empty(MeshCell{WriteVTK.PolyData.Verts,UnitRange{Int64}}[])
+
+        vtk_grid("D:/vtk/tttest", coordsarr..., polys, verts, compress = true, append = false) do vtk
+            for (k, v) in expdict
+                vtk[k] = v
+            end
+
+        end

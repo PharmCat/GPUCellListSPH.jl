@@ -22,10 +22,10 @@ c₀  = sqrt(g * 2) * 20
 Δt  = dt  = 1e-5
 δᵩ  = 0.1
 CFL = 0.2
-cellsize = (1.2*H, 1.2*H)
+cellsize = (dist, dist)
 sphkernel    = WendlandC2(Float64, 2)
 
-system  = GPUCellListSPH.GPUCellList(cpupoints, cellsize, H)
+system  = GPUCellListSPH.GPUCellList(cpupoints, cellsize, dist)
 
 ρ           = cu(Array([DF_FLUID.Rhop;DF_BOUND.Rhop]))
 ml          = cu(append!(ones(Float64, size(DF_FLUID, 1)), zeros(Float64, size(DF_BOUND, 1))))
