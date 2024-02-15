@@ -26,7 +26,7 @@ c₀  = sqrt(g * 2) * 20      # Speed of sound
 Δt  = dt  = 1e-5
 δᵩ  = 0.1                   # Coefficient for density diffusion
 CFL = 0.2                   # Courant–Friedrichs–Lewy condition for Δt stepping
-cellsize = (H, H)           # cell size
+cellsize = (1.2*H, 1.2*H)           # cell size
 sphkernel    = WendlandC2(Float64, 2) # SPH kernel from SPHKernels.jl
 
 system  = GPUCellList(cpupoints, cellsize, H)
@@ -56,4 +56,4 @@ timesolve!(sphprob; batch = 10, timeframe = 1.0, writetime = 0.02, path = "D:/vt
 # timestepping adjust dt
 # time lims for dt
 # now Δt adjust often buggy
-timesolve!(sphprob; batch = 20, timeframe = 10.0, writetime = 0.02, vtkpath = "D:/vtk/", pvc = true, timestepping = true) 
+timesolve!(sphprob; batch = 50, timeframe = 10.0, writetime = 0.02, path = "D:/vtk/", pvc = true, timestepping = true) 
