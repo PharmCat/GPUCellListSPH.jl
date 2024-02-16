@@ -183,7 +183,7 @@ function _stepsolve!(prob::SPHProblem, n::Int, ::StepByStep; timestepping = fals
         end
 
     end
-    skipupdaten/n, maxcΔxout
+    n/skipupdaten, maxcΔxout
 end
 
 
@@ -233,7 +233,7 @@ function timesolve!(prob::SPHProblem; batch = 10, timeframe = 1.0, writetime = 0
     if timelims[2] > prob.CFL * prob.H /3prob.c₀ 
         @warn "Maximum dt limit ($(timelims[2])) > CFL*H/3c₀ ($(prob.CFL * prob.H /3prob.c₀))" 
     end
-    if timestepping timelims = (max(timelims[1], eps()), min(timelims[2], prob.CFL * prob.H /3prob.c₀, prob.Δt))
+    if timestepping timelims = (max(timelims[1], eps()), min(timelims[2], prob.CFL * prob.H /3prob.c₀, prob.Δt)) end
     if verbose
         println("    Start simulation...")
         println("Timestepping: $timestepping")
@@ -295,7 +295,7 @@ function timesolve!(prob::SPHProblem; batch = 10, timeframe = 1.0, writetime = 0
         end
 
         i += 1
-        next!(prog, spinner="🌑🌒🌓🌔🌕🌖🌗🌘", showvalues = [(:iter, i), (:time, prob.etime), (:Δt, prob.Δt), (Symbol("su%"), diaginf[1]*100), (:dxpncu, diaginf[2])])
+        next!(prog, spinner="🌑🌒🌓🌔🌕🌖🌗🌘", showvalues = [(:iter, i), (:time, prob.etime), (:Δt, prob.Δt), (Symbol("sur"), diaginf[1]), (:dxpncu, diaginf[2])])
     end
 
     if writetime > 0 && !isnothing(path) 

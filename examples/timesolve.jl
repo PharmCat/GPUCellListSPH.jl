@@ -16,7 +16,7 @@ h   = 1.2 * sqrt(2) * dx    # smoothinl length
 H   = 2h                    # kernel support length
 h⁻¹ = 1/h
 H⁻¹ = 1/H
-dist = 1.2H                    # distance for neighborlist
+dist = 1.1H                    # distance for neighborlist
 ρ₀  = 1000.0                 
 m₀  = ρ₀ * dx * dx
 α   = 0.01                  # Artificial viscosity constant
@@ -56,4 +56,4 @@ timesolve!(sphprob; batch = 10, timeframe = 2.0, writetime = 0.025, path = "D:/v
 # timestepping adjust dt
 # time lims for dt
 # now Δt adjust often buggy
-#timesolve!(sphprob; batch = 50, timeframe = 3.5, writetime = 0.01, path = "D:/vtk/", pvc = true, timestepping = true, timelims = (eps(), 1e-5)) 
+timesolve!(sphprob; batch = 200, timeframe = 3.5, writetime = 0.01, path = "D:/vtk/", pvc = true, timestepping = true, timelims = (eps(), 1e-5)) 
