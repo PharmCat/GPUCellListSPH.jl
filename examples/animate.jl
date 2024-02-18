@@ -12,7 +12,7 @@ h   = 1.2 * sqrt(2) * dx
 H   = 2h
 h⁻¹ = 1/h
 H⁻¹ = 1/H
-dist = H
+dist = 1.1H
 ρ₀  = 1000.0
 m₀  = ρ₀ * dx * dx
 α   = 0.01
@@ -23,10 +23,10 @@ c₀  = sqrt(g * 2) * 20
 Δt  = dt  = 1e-5
 δᵩ  = 0.1
 CFL = 0.2
-cellsize = (1.2*H, 1.2*H)
+cellsize = (dist, dist)
 sphkernel    = WendlandC2(Float64, 2)
 
-system  = GPUCellList(cpupoints, cellsize, H)
+system  = GPUCellList(cpupoints, cellsize, dist)
 N       = length(cpupoints)
 ρ       = CUDA.zeros(Float64, N)
 copyto!(ρ, Array([DF_FLUID.Rhop;DF_BOUND.Rhop]))
@@ -49,4 +49,4 @@ sphprob =  SPHProblem(system, h, H, sphkernel, ρ, v, ml, gf, isboundary, ρ₀,
 # vtkwritetime - write vtp file each intervalgr()
 # vtkpath - path to vtp files
 # pcx - make paraview collection
-timesolve!(sphprob; batch = 250, timeframe = 1.0, writetime = 0.025, path = "D:/vtk/", pvc = true, anim = true)
+timesolve!(sphprob; batch = 100, timeframe = 1.0, writetime = 0.01, path = "D:/vtk/", pvc = true, anim = true)

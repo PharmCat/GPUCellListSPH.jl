@@ -100,7 +100,7 @@ end
 
 Full update cell grid.
 """
-function update!(c::GPUCellList)
+@noinline function update!(c::GPUCellList)
     #cellmap_2d!(c.pcell, c.points, (c.cs[2], c.cs[2]), c.offset)
 
     fill!(c.cellpnum, zero(Int32))
@@ -157,7 +157,7 @@ end
 
 Update only distance 
 """
-function partialupdate!(c::GPUCellList)
+@noinline function partialupdate!(c::GPUCellList)
     fill!(c.cnt, zero(Int32))
     fill!(c.pairs, (zero(Int32), zero(Int32), NaN))
     neib_internal_2d!(c.pairs, c.cnt, c.cellpnum, c.points, c.celllist, c.dist)

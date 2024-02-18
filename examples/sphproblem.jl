@@ -12,7 +12,7 @@ h   = 1.2 * sqrt(2) * dx
 H   = 2h
 h⁻¹ = 1/h
 H⁻¹ = 1/H
-dist = H
+dist = 1.1H
 ρ₀  = 1000.0
 m₀  = ρ₀ * dx * dx
 α   = 0.01
@@ -36,6 +36,8 @@ v           = CUDA.fill((0.0, 0.0), length(cpupoints))
 
 sphprob =  SPHProblem(system, h, H, sphkernel, ρ, v, ml, gf, isboundary, ρ₀, m₀, Δt, α, g, c₀, γ, δᵩ, CFL)
 
+stepsolve!(sphprob, 1)
+
 stepsolve!(sphprob, 1000)
 
 
@@ -48,19 +50,19 @@ get_density(sphprob)
 get_acceleration(sphprob)
 
 
-@benchmark stepsolve!($sphprob, 1)
+@benchmark stepsolve!($sphprob, 1000)
 
 #=
-BenchmarkTools.Trial: 946 samples with 1 evaluation.
- Range (min … max):  4.714 ms … 42.996 ms  ┊ GC (min … max): 0.00% … 54.74%
- Time  (median):     5.193 ms              ┊ GC (median):    0.00%
- Time  (mean ± σ):   5.284 ms ±  1.250 ms  ┊ GC (mean ± σ):  0.47% ±  1.78%
+BenchmarkTools.Trial: 2 samples with 1 evaluation.
+ Range (min … max):  2.791 s …   2.806 s  ┊ GC (min … max): 0.71% … 0.00%
+ Time  (median):     2.799 s              ┊ GC (median):    0.35%
+ Time  (mean ± σ):   2.799 s ± 10.694 ms  ┊ GC (mean ± σ):  0.35% ± 0.50%
 
-               ▁▃▄▄█▅▆▄▅▂▃▃▁▁
-  ▂▁▁▂▂▂▃▄▄▄▄▇▇███████████████▇▅▅▅▄▄▄▄▃▄▄▃▃▄▄▄▃▃▃▂▃▃▃▂▂▂▃▃▃▂ ▄
-  4.71 ms        Histogram: frequency by time        6.04 ms <
+  █                                                       █  
+  █▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁█ ▁
+  2.79 s         Histogram: frequency by time        2.81 s <
 
- Memory estimate: 100.20 KiB, allocs estimate: 1938.
+ Memory estimate: 76.60 MiB, allocs estimate: 1484501.
 =#
 
 @benchmark stepsolve!($sphprob, 1; simwl = GPUCellListSPH.Effective())

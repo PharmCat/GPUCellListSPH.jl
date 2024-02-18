@@ -51,7 +51,7 @@ sphprob =  SPHProblem(system, h, H, sphkernel, ρ, v, ml, gf, isboundary, ρ₀,
 # writetime - write vtp file each interval
 # path - path to vtp files
 # pvc - make paraview collection
-timesolve!(sphprob; batch = 10, timeframe = 2.0, writetime = 0.025, path = "D:/vtk/", pvc = true)
+timesolve!(sphprob; batch = 100, timeframe = 2.5, writetime = 0.025, path = "D:/vtk/", pvc = true)
 
 # timestepping adjust dt
 # time lims for dt

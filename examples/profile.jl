@@ -14,7 +14,7 @@ h   = 1.2 * sqrt(2) * dx
 H   = 2h
 h⁻¹ = 1/h
 H⁻¹ = 1/H
-dist = H
+dist = 1.1*H
 ρ₀  = 1000.0
 m₀  = ρ₀ * dx * dx
 α   = 0.01
@@ -27,7 +27,7 @@ CFL = 0.2
 cellsize = (dist, dist)
 sphkernel    = WendlandC2(Float64, 2)
 
-system  = GPUCellListSPH.GPUCellList(cpupoints, cellsize, dist)
+system  = GPUCellList(cpupoints, cellsize, dist)
 
 ρ           = cu(Array([DF_FLUID.Rhop;DF_BOUND.Rhop]))
 ml          = cu(append!(ones(Float64, size(DF_FLUID, 1)), zeros(Float64, size(DF_BOUND, 1))))
@@ -42,6 +42,8 @@ sphprob =  SPHProblem(system, h, H, sphkernel, ρ, v, ml, gf, isboundary, ρ₀,
 stepsolve!(sphprob, 1)
 
 @profile  stepsolve!(sphprob, 10000)
+
+@profile  timesolve!(sphprob; batch = 300, timeframe = 0.2)
 
 pprof()
 
