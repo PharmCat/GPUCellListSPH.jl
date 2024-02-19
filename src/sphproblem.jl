@@ -198,7 +198,7 @@ function _stepsolve!(prob::SPHProblem, n::Int, ::StepByStep; timestepping = fals
         update_all!(prob.ρ, prob.ρΔt½, prob.v, prob.vΔt½, x, prob.xΔt½, prob.∑∂ρ∂t, prob.∑∂v∂t, prob.Δt, prob.cΔx, prob.ρ₀, prob.isboundary, prob.ml)
         
         # Dynamic Particle Collision (DPC) 
-        dpcreg!(prob.∑Δvdpc, prob.v, prob.ρ, prob.P, pairs, x, prob.sphkernel, prob.h, prob.H⁻¹, 2.0, 1000.0, prob.Δt, 0.01)  
+        dpcreg!(prob.∑Δvdpc, prob.v, prob.ρ, prob.P, pairs, x, prob.sphkernel, 0.01, 100.0, 2.0, 1000.0, prob.Δt, 0.01)  
         #update_dpcreg!(prob.v, x, prob.∑Δvdpc, prob.Δt, prob.isboundary) 
 
         maxcΔx = maximum(maximum.(abs, prob.cΔx))

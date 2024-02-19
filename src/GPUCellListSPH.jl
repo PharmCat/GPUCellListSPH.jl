@@ -12,7 +12,9 @@ export SPHProblem, stepsolve!, timesolve!, get_points, get_velocity, get_density
 
 #include("sphkernels.jl")
 include("gpukernels.jl")
+include("gpulistkernels.jl")
 include("structs.jl")
+include("gpunlist.jl")
 include("auxillary.jl")
 include("sphproblem.jl")
 include("writevtk.jl")

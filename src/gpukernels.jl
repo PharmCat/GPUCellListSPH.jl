@@ -216,6 +216,51 @@ function neib_external_2d!(pairs, cnt, cellpnum, points, celllist, offset, dist)
     CUDA.@sync gpukernel(pairs, cnt, cellpnum, points, celllist, offset, dist; threads = threads, blocks = blocks)
 end
 #####################################################################
+# Make neighbor matrix (list)
+#####################################################################
+function kernel_neiblist_2d!(nlist, ncnt, points,  celllist, cellpnum, pcell, dist, offset) 
+    index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
+    if index <= length(points)
+        # get point cell
+        cell   = pcell[index]
+        celli  = cell[1] + offset[1]
+        cellj  = cell[2] + offset[2]
+        if  0 < celli <= size(celllist, 2) && 0 < cellj <= size(celllist, 3)
+            snl    = size(nlist, 1)
+            clist  = view(celllist, :, celli, cellj)
+            celln  = cellpnum[celli, cellj]
+            distsq = dist * dist
+            cnt    = ncnt[index]
+            pointi = points[index]
+            pointj = points[indexj]
+            for i = 1:celln
+                indexj = clist[i]
+                if index != indexj && (pointi[1] - pointj[1])^2 + (pointi[2] - pointj[2])^2 < distsq
+                    cnt += 1
+                    if cnt <= snl
+                        nlist[cnt, index] = indexj
+                    end
+                end
+            end
+            ncnt[index] = cnt
+        end
+    end
+    return nothing
+end
+"""
+    neiblist_2d!(nlist, ncnt, points,  celllist, cellpnum, pcell, dist, offset)
+
+"""
+function neiblist_2d!(nlist, ncnt, points,  celllist, cellpnum, pcell, dist, offset)
+    gpukernel = @cuda launch=false kernel_neiblist_2d!(nlist, ncnt, points,  celllist, cellpnum, pcell, dist, offset)
+    config = launch_configuration(gpukernel.fun)
+    Nx = length(points)
+    maxThreads = config.threads
+    Tx  = min(maxThreads, Nx)
+    Bx  = cld(Nx, Tx)
+    CUDA.@sync gpukernel(nlist, ncnt, points,  celllist, cellpnum, pcell, dist, offset; threads = Tx, blocks = Bx)
+end
+#####################################################################
 #####################################################################
 # SPH
 #####################################################################
@@ -257,15 +302,15 @@ function kernel_∑∇W_2d!(∑∇W, ∇Wₙ, pairs, points, kernel, H⁻¹)
     index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
     if index <= length(pairs)
         pair  = pairs[index]
-        pᵢ    = pair[1]; pⱼ = pair[2]; d = pair[3]
-        if !isnan(d)
+        pᵢ    = pair[1]; pⱼ = pair[2]; r = pair[3]
+        if !isnan(r)
 
             xᵢ    = points[pᵢ]
             xⱼ    = points[pⱼ]
             Δx    = (xᵢ[1] - xⱼ[1], xᵢ[2] - xⱼ[2])
-            d     = sqrt(Δx[1]^2 + Δx[2]^2) 
-            u     = d * H⁻¹
-            dwk_r = d𝒲(kernel, u, H⁻¹) / d
+            r     = sqrt(Δx[1]^2 + Δx[2]^2) 
+            u     = r * H⁻¹
+            dwk_r = d𝒲(kernel, u, H⁻¹) / r
             ∇w    = (Δx[1] * dwk_r, Δx[2] * dwk_r)
 
             if isnan(dwk_r) 

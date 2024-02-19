@@ -1,9 +1,130 @@
 using BenchmarkTools, GPUCellListSPH, CUDA, StaticArrays
 
 
-cpupoints = map(x->tuple(x...), eachrow(rand(Float64, 200000, 2)))
+points = map(x->tuple(x...), eachrow(rand(Float64, 200000, 2)))
 
-cpupoints = map(x->SVector(tuple(x...)), eachrow(rand(Float64, 200000, 2)))
+#cpupoints = map(x->SVector(tuple(x...)), eachrow(rand(Float64, 200000, 2)))
+cellsize = (0.04, 0.04)
+dist = 0.04
+
+el = first(points)
+if length(el) < 2 error("wrong dimention") end
+
+N = length(points)                                          # Number of points 
+pcell = CUDA.fill((Int32(0), Int32(0)), N)                  # list of cellst for each particle
+pvec  = CUDA.zeros(Int32, N)                                # vector for sorting method fillcells_psort_2d!
+cs1 = cellsize[1]                                           # cell size by 1-dim
+cs2 = cellsize[2]                                           # cell size by 2-dim 
+if cs1 < dist 
+    @warn "Cell size 1 < dist, cell size set to dist"
+     cs1 = dist 
+end
+if cs2 < dist 
+    @warn "Cell size 2 < dist, cell size set to dist"
+    cs2 = dist 
+end
+MIN1   = minimum(x->x[1], points)                           # minimal value 
+MIN1   = MIN1 - abs((MIN1 + sqrt(eps())) * sqrt(eps()))     # minimal value 1-dim (a lillte bil less for better cell fitting)
+MAX1   = maximum(x->x[1], points)                           # maximum 1-dim
+MIN2   = minimum(x->x[2], points)                           # minimal value 
+MIN2   = MIN2 - abs((MIN2 + sqrt(eps())) * sqrt(eps()))     # minimal value 2-dim (a lillte bil less for better cell fitting)
+MAX2   = maximum(x->x[2], points)                           # maximum 1-dim
+range1 = MAX1 - MIN1                                        # range 1-dim
+range2 = MAX2 - MIN2                                        # range 2-dim
+CELL1  = ceil(Int, range1/cs1)                              # number of cells 1-dim
+CELL2  = ceil(Int, range2/cs2)                              # number of cells 2-dim
+
+cellpnum     = CUDA.zeros(Int32, CELL1, CELL2)              # 2-dim array for number of particles in each cell 
+cnt          = CUDA.zeros(Int, 1)                           # temp array for particles counter (need to count place for each pair in pair list)
+points       = cu(points)                                   # array with particles / points
+
+GPUCellListSPH.cellmap_2d!(pcell, cellpnum, points,  (cs1, cs2), (MIN1, MIN2))                 # modify pcell, cellpnum < pcell - map each point to cell, cellpnum - number of particle in each cell
+
+maxpoint = Int(ceil(maximum(cellpnum)*1.05 + 1))                                # mppcell - maximum particle in cell for cell list (with reserve ~ 5%)
+mppcell = maxpoint 
+    
+    
+celllist     = CUDA.zeros(Int32, mppcell, CELL1, CELL2)  
+
+fill!(cellpnum, Int32(0))                                                          # set cell counter to zero 
+GPUCellListSPH.fillcells_naive_2d!(celllist, cellpnum,  pcell)  
+
+maxneigh = maximum(cellpnum)*9
+
+ncnt  = CUDA.zeros(Int32, N)  
+nlist = CUDA.zeros(Int32, maxneigh, N) 
+
+function kernel_neiblist_2d!(nlist, ncnt, points,  celllist, cellpnum, pcell, dist, offset) 
+    index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
+    if index <= length(points)
+        # get point cell
+        cell   = pcell[index]
+        celli  = cell[1] + offset[1]
+        cellj  = cell[2] + offset[2]
+        if  0 < celli <= size(celllist, 2) && 0 < cellj <= size(celllist, 3)
+            clist  = view(celllist, :, celli, cellj)
+            celln  = cellpnum[celli, cellj]
+            distsq = dist^2
+            cnt    = ncnt[index]
+            for i = 1:celln
+                indexj = clist[i]
+                if index != indexj && (points[index][1] - points[indexj][1])^2 + (points[index][2] - points[indexj][2])^2 < distsq
+                    cnt += 1
+                    if cnt <= size(nlist, 1)
+                        nlist[cnt, index] = indexj
+                    end
+                end
+            end
+            ncnt[index] = cnt
+        end
+    end
+    return nothing
+end
+"""
+    neiblist_2d!(nlist, ncnt, points,  celllist, cellpnum, pcell, dist, offset)
+
+"""
+function neiblist_2d!(nlist, ncnt, points,  celllist, cellpnum, pcell, dist, offset)
+    gpukernel = @cuda launch=false kernel_neiblist_2d!(nlist, ncnt, points,  celllist, cellpnum, pcell, dist, offset)
+    config = launch_configuration(gpukernel.fun)
+    Nx = length(points)
+    maxThreads = config.threads
+    Tx  = min(maxThreads, Nx)
+    Bx  = cld(Nx, Tx)
+    CUDA.@sync gpukernel(nlist, ncnt, points,  celllist, cellpnum, pcell, dist, offset; threads = Tx, blocks = Bx)
+end
+
+
+fill!(nlist, 0)
+fill!(ncnt, 0)
+
+
+
+
+neiblist_2d!(nlist, ncnt, points,  celllist, cellpnum, pcell, dist,  (0, 1))
+neiblist_2d!(nlist, ncnt, points,  celllist, cellpnum, pcell, dist,  (0, 0))
+neiblist_2d!(nlist, ncnt, points,  celllist, cellpnum, pcell, dist,  (0,-1))
+neiblist_2d!(nlist, ncnt, points,  celllist, cellpnum, pcell, dist,  (1, 1))
+neiblist_2d!(nlist, ncnt, points,  celllist, cellpnum, pcell, dist,  (1, 0))
+neiblist_2d!(nlist, ncnt, points,  celllist, cellpnum, pcell, dist,  (1,-1))
+neiblist_2d!(nlist, ncnt, points,  celllist, cellpnum, pcell, dist, (-1, 1))
+neiblist_2d!(nlist, ncnt, points,  celllist, cellpnum, pcell, dist, (-1, 0))
+neiblist_2d!(nlist, ncnt, points,  celllist, cellpnum, pcell, dist, (-1,-1))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+cpupoints = map(x->tuple(x...), eachrow(rand(Float64, 200000, 2)))
 
 system = GPUCellListSPH.GPUCellList(cpupoints, (0.016, 0.016), 0.016)
 
@@ -30,6 +151,40 @@ count(x-> !isnan(x[3]), system.pairs) == system.pairsn
 
 
 @benchmark GPUCellListSPH.partialupdate!($system)
+
+system2 = GPUCellListSPH.GPUNeighborCellList(cpupoints, (0.016, 0.016), 0.016)
+system2.points # points
+system2.nlist # pairs list
+system2.grid # cell grid 
+
+sum(system2.cellpnum) # total cell number
+
+maximum(system2.cellpnum) # maximum particle in cell
+
+
+GPUCellListSPH.update!(system2)
+
+GPUCellListSPH.partialupdate!(system2)
+
+@benchmark GPUCellListSPH.update!($system2)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 using GPUCellListSPH
 using CSV, DataFrames, CUDA, BenchmarkTools
@@ -78,17 +233,30 @@ boundary_csv = joinpath(path, "./input/BoundaryPoints_Dp0.02.csv")
 
     sphkernel    = WendlandC2(Float64, 2)
 
-    system  = GPUCellListSPH.GPUCellList(cpupoints, cellsize, H)
+    system  =  GPUCellListSPH.GPUCellList(cpupoints, cellsize, H)
+    system2  = GPUCellListSPH.GPUNeighborCellList(cpupoints, cellsize, H)
  
     sumW    = CUDA.zeros(Float64, N)
-    sum∇W   = CUDA.zeros(Float64, N, 2)
-    ∇Wₙ     =  CUDA.fill((zero(Float64), zero(Float64)), length(system.pairs))
+    ∑∇W     = Tuple(CUDA.zeros(Float64, N) for n in 1:2)
+    ∇Wₙ     = CUDA.fill(zero(NTuple{2, Float64}), length(system.pairs))
     ∑∂ρ∂t   = CUDA.zeros(Float64, N)
     ∑∂Π∂t   = CUDA.zeros(Float64, N, 2)
     ∑∂v∂t   = CUDA.zeros(Float64, N, 2)
 
     buf     = CUDA.zeros(Float64, N)
     etime = 0.0
+
+    #∑∇W, ∇Wₙ, pairs, points, kernel, H⁻¹
+
+    GPUCellListSPH.∑∇W_2d!(∑∇W, ∇Wₙ , system.pairs,  system.points, sphkernel, H⁻¹)
+
+    GPUCellListSPH.∂ρ∂tDDT!(∑∂ρ∂t, ∇Wₙ, system.pairs, system.points, h, m₀, δᵩ, c₀, γ, g, ρ₀, ρ, v, isboundary) 
+    GPUCellListSPH.∂ρ∂tDDT_2!(∑∂ρ∂t, system2.nlist, system2.cnt, system2.points, sphkernel, h, H⁻¹, m₀, δᵩ, c₀, γ, g, ρ₀, ρ, v, isboundary) 
+
+    @benchmark GPUCellListSPH.∂ρ∂tDDT!($∑∂ρ∂t, $∇Wₙ, $system.pairs, $system.points, $h, $m₀, $δᵩ, $c₀, $γ, $g, $ρ₀, $ρ, $v, $isboundary)
+
+    @benchmark GPUCellListSPH.∂ρ∂tDDT_2!($∑∂ρ∂t, $system2.nlist, $system2.cnt, $system2.points, $sphkernel, $h, $H⁻¹, $m₀, $δᵩ, $c₀, $γ, $g, $ρ₀, $ρ, $v, $isboundary) 
+
 #== ==#
 function sph_simulation(system, sphkernel, ρ, ρΔt½, v, vΔt½, xΔt½, ∑∂Π∂t, ∑∂ρ∂t, ∑∂v∂t, sumW, sum∇W, ∇Wₙ, Δt, ρ₀, isboundary, ml, h, H⁻¹, m₀, δᵩ, c₀, γ, g, α; simn = 1)
 

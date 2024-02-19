@@ -40,7 +40,7 @@ function GPUCellList(points, cellsize, dist; mppcell = 0, mpairs = 0)
     MIN1   = MIN1 - abs((MIN1 + sqrt(eps())) * sqrt(eps()))     # minimal value 1-dim (a lillte bil less for better cell fitting)
     MAX1   = maximum(x->x[1], points)                           # maximum 1-dim
     MIN2   = minimum(x->x[2], points)                           # minimal value 
-    MIN2   = MIN2 - abs((MIN1 + sqrt(eps())) * sqrt(eps()))     # minimal value 2-dim (a lillte bil less for better cell fitting)
+    MIN2   = MIN2 - abs((MIN2 + sqrt(eps())) * sqrt(eps()))     # minimal value 2-dim (a lillte bil less for better cell fitting)
     MAX2   = maximum(x->x[2], points)                           # maximum 1-dim
     range1 = MAX1 - MIN1                                        # range 1-dim
     range2 = MAX2 - MIN2                                        # range 2-dim
