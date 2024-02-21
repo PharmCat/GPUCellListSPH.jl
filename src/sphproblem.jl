@@ -110,6 +110,8 @@ function _stepsolve!(prob::SPHProblem, n::Int, ::StepByStep; timestepping = fals
     maxcΔx         = 0.0
     maxcΔxout      = 0.0
 
+    dpckernlim = find_zero(x-> 1.0 - 𝒲(prob.sphkernel, x, 1.0), 0.5)
+
     for iter = 1:n
         if skipupdate 
             skipupdaten += 1
@@ -198,8 +200,8 @@ function _stepsolve!(prob::SPHProblem, n::Int, ::StepByStep; timestepping = fals
         update_all!(prob.ρ, prob.ρΔt½, prob.v, prob.vΔt½, x, prob.xΔt½, prob.∑∂ρ∂t, prob.∑∂v∂t, prob.Δt, prob.cΔx, prob.ρ₀, prob.isboundary, prob.ml)
         
         # Dynamic Particle Collision (DPC) 
-        dpcreg!(prob.∑Δvdpc, prob.v, prob.ρ, prob.P, pairs, x, prob.sphkernel, 0.01, 100.0, 2.0, 1000.0, prob.Δt, 0.01)  
-        #update_dpcreg!(prob.v, x, prob.∑Δvdpc, prob.Δt, prob.isboundary) 
+        dpcreg!(prob.∑Δvdpc, prob.v, prob.ρ, prob.P, pairs, x, prob.sphkernel, 0.01, 10.0, 10000.0, prob.Δt, 0.02, dpckernlim)  
+        update_dpcreg!(prob.v, x, prob.∑Δvdpc, prob.Δt, prob.isboundary) 
 
         maxcΔx = maximum(maximum.(abs, prob.cΔx))
         if maxcΔx > 0.9 * prob.nui  

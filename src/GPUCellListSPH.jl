@@ -2,7 +2,7 @@ module GPUCellListSPH
 
 import Base: show
 
-using CUDA, SPHKernels, CSV, DataFrames, WriteVTK, ProgressMeter, StaticArrays, Plots
+using CUDA, SPHKernels, CSV, DataFrames, WriteVTK, ProgressMeter, StaticArrays, Plots, Roots
 
 import Plots: Animation
 

@@ -933,14 +933,14 @@ end
 
 ###################################################################################
 
-function kernel_dpcreg!(∑Δvdpc, v, ρ, P, pairs, points, sphkernel, wh⁻¹, h, H⁻¹, Pmin, Pmax, Δt, λ) 
+function kernel_dpcreg!(∑Δvdpc, v, ρ, P, pairs, points, sphkernel, wh⁻¹, l₀, l₀⁻¹, Pmin, Pmax, Δt, λ, dpckernlim) 
     index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
 
     if index <= length(pairs)
         pair  = pairs[index]
         pᵢ    = pair[1]; pⱼ = pair[2]; d = pair[3]
         if !isnan(d)
-            η²    = (0.1 * h) * (0.1 * h)
+            η²    = (0.1 * l₀) * (0.1 * l₀)
             xᵢ    = points[pᵢ]
             xⱼ    = points[pⱼ]
             ρᵢ    = ρ[pᵢ]
@@ -950,12 +950,12 @@ function kernel_dpcreg!(∑Δvdpc, v, ρ, P, pairs, points, sphkernel, wh⁻¹, 
             Δv    = (v[pᵢ][1] - v[pⱼ][1], v[pᵢ][2] - v[pⱼ][2])
             r²    = Δx[1]^2 + Δx[2]^2 
             r     = sqrt(r²) 
-            u     = r * H⁻¹
-            w     = 𝒲(sphkernel, u, H⁻¹)
+            u     = r * l₀⁻¹
+            w     = 𝒲(sphkernel, u, l₀⁻¹)
 
             χ     = sqrt(w * wh⁻¹)
 
-            k     = ifelse(u < 0.5, 1.0, χ)
+            k     = ifelse(u < dpckernlim, 1.0, χ)
 
             Pᵇ    = χ * max(min(λ * abs(P[pᵢ] + P[pⱼ]), λ * Pmax), Pmin)
 
@@ -963,23 +963,24 @@ function kernel_dpcreg!(∑Δvdpc, v, ρ, P, pairs, points, sphkernel, wh⁻¹, 
 
             if vr < 0
                 # Δvdpc = ∑ k * 2mⱼ / (mᵢ + mⱼ) * vᶜ   | mⱼ = mᵢ |  => Δvdpc = ∑ k * vᶜ
-                vᶜ      = (vr * Δx[1] / (r² + η²),  vr * Δx[2] / (r² + η²))
-                Δvdpc = (k * vᶜ[1],  k * vᶜ[2])
+                vrdr    = vr / (r² + η²)
+                vᶜ      = (vrdr * Δx[1],  vrdr * Δx[2])
+                Δvdpc   = (k * vᶜ[1],  k * vᶜ[2])
             else
                 # Δvdpc = Δt / ρᵢ * ∑ 2Vᵢ / (Vᵢ + Vⱼ) * Pᵇ / (r² + η²) * Δx
                 # V = m / ρ
                 # Δvdpc = Δt * ∑ 2 / (ρᵢ + ρⱼ) * Pᵇ / (r² + η²) * Δx
-                tvar = Δt * 2 / (ρᵢ + ρⱼ) * Pᵇ / (r² + η²)
+                tvar = 2Δt* Pᵇ / ((ρᵢ + ρⱼ) * (r² + η²))
 
                 Δvdpc = (tvar * Δx[1], tvar * Δx[2])
             end
             
             ∑Δvdpcˣ = ∑Δvdpc[1]
             ∑Δvdpcʸ = ∑Δvdpc[2]   
-            CUDA.@atomic ∑Δvdpcˣ[pᵢ] +=  Δvdpc[1]
-            CUDA.@atomic ∑Δvdpcʸ[pᵢ] +=  Δvdpc[2]
-            CUDA.@atomic ∑Δvdpcˣ[pⱼ] -=  Δvdpc[1]
-            CUDA.@atomic ∑Δvdpcʸ[pⱼ] -=  Δvdpc[2]
+            CUDA.@atomic ∑Δvdpcˣ[pᵢ] -=  Δvdpc[1]
+            CUDA.@atomic ∑Δvdpcʸ[pᵢ] -=  Δvdpc[2]
+            CUDA.@atomic ∑Δvdpcˣ[pⱼ] +=  Δvdpc[1]
+            CUDA.@atomic ∑Δvdpcʸ[pⱼ] +=  Δvdpc[2]
 
         end
     end
@@ -990,15 +991,16 @@ end
     dpcreg!(∑∂v∂tdpc, ρ, P, pairs, points, sphkernel, H⁻¹, Pmin, Pmax, Δt) 
 
 """
-function dpcreg!(∑Δvdpc, v, ρ, P, pairs, points, sphkernel, h, H⁻¹, Pmin, Pmax, Δt, λ) 
-    wh⁻¹     = 1/𝒲(sphkernel, 0.5, H⁻¹)
-    gpukernel = @cuda launch=false kernel_dpcreg!(∑Δvdpc, v, ρ, P, pairs, points, sphkernel, wh⁻¹, h, H⁻¹, Pmin, Pmax, Δt, λ) 
+function dpcreg!(∑Δvdpc, v, ρ, P, pairs, points, sphkernel, l₀, Pmin, Pmax, Δt, λ, dpckernlim)
+    l₀⁻¹     = 1 / l₀  
+    wh⁻¹     = 1 / 𝒲(sphkernel, 0.5, l₀⁻¹)
+    gpukernel = @cuda launch=false kernel_dpcreg!(∑Δvdpc, v, ρ, P, pairs, points, sphkernel, wh⁻¹, l₀, l₀⁻¹, Pmin, Pmax, Δt, λ, dpckernlim) 
     config = launch_configuration(gpukernel.fun)
     Nx = length(pairs)
     maxThreads = config.threads
     Tx  = min(maxThreads, Nx)
     Bx = cld(Nx, Tx)
-    CUDA.@sync gpukernel(∑Δvdpc, v, ρ, P, pairs, points, sphkernel, wh⁻¹, h, H⁻¹, Pmin, Pmax, Δt, λ; threads = Tx, blocks = Bx)
+    CUDA.@sync gpukernel(∑Δvdpc, v, ρ, P, pairs, points, sphkernel, wh⁻¹, l₀, l₀⁻¹, Pmin, Pmax, Δt, λ, dpckernlim; threads = Tx, blocks = Bx)
 end
 
 

@@ -2,6 +2,7 @@
 #####################################################################
 # Make neighbor matrix (list) EXPERIMENTAL
 #####################################################################
+#=
 function kernel_neiblist_2d!(nlist, ncnt, points,  celllist, cellpnum, pcell, dist, offset) 
     index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
     if index <= length(points)
@@ -113,3 +114,4 @@ function ∂ρ∂tDDT_2!(∑∂ρ∂t, nlist, ncnt, points, kernel, h, H⁻¹, m
     Bx = cld(Nx, Tx)
     CUDA.@sync gpukernel(∑∂ρ∂t, nlist, ncnt, points, kernel, h, H⁻¹, m₀, δᵩ, c₀, γ, g, ρ₀, ρ, v, isboundary; threads = Tx, blocks = Bx)
 end
+=#
