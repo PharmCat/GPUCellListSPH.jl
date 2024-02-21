@@ -23,41 +23,46 @@ struct Effective  <: SimWorkLoad end
 mutable struct SPHProblem
     system::GPUCellList
     dim::Int
-    h::Float64
+    h::Float64                                  # smoothing length
     h⁻¹::Float64
-    H::Float64
+    H::Float64                                  # kernel support radius (2h)
     H⁻¹::Float64
-    sphkernel
-    ∑W
-    ∑∇W
-    ∇Wₙ
-    ∑∂Π∂t
-    ∑∂v∂t
-    ∑∂ρ∂t
-    ∑Δvdpc
-    ρ
-    ρΔt½
-    v
-    vΔt½
-    xΔt½
-    P
+    sphkernel::AbstractSPHKernel                # SPH kernel from SPHKernels.jl
+    ∑W::CuArray                                 # sum of kernel values
+    ∑∇W                                         # sum of kernel gradients
+    ∇Wₙ::CuArray                                # values of kernel gradient for each pair 
+    ∑∂Π∂t                                       # artificial viscosity
+    ∑∂v∂t                                       # acceleration (momentum equation)
+    ∑∂ρ∂t                                       # rho diffusion - density derivative function (with diffusion)
+    ∑Δvdpc                                      # velocity dynamic particle collision correction 
+    ρ::CuArray                                  # rho
+    ρΔt½                                        # rho at t½  
+    v                                           # velocity
+    vΔt½                                        # velocity at t½  
+    xΔt½                                        # coordinates at xΔt½
+    P::CuArray                                  # pressure (Equation of State in Weakly-Compressible SPH)
     ml
-    gf
-    isboundary
-    ρ₀::Float64
-    m₀::Float64
-    Δt::Float64
-    α::Float64
-    g::Float64
-    c₀::Float64
-    γ
-    s::Float64                # surface tension
-    δᵩ::Float64
-    CFL::Float64
-    buf
-    etime::Float64
-    cΔx
-    nui::Float64
+    gf                                          # gravity vector
+    isboundary::CuArray                         # is particle boundary
+    ρ₀::Float64                                 # Reference density
+    m₀::Float64                                 # Initial mass
+    Δt::Float64                                 # default Δt
+    α::Float64                                  # Artificial viscosity alpha constant
+    g::Float64                                  # gravity constant
+    c₀::Float64                                 # speed of sound
+    γ                                           # Gamma, 7 for water (used in the pressure equation of state)
+    s::Float64                                  # surface tension constant
+    δᵩ::Float64                                 # Coefficient for density diffusion, typically 0.1
+    CFL::Float64                                # CFL number for the simulation 
+    buf                                         # buffer for dt calculation
+    etime::Float64                              # simulation time
+    cΔx                                         # cumulative location changes in batch
+    nui::Float64                                # non update interval, update if maximum(maximum.(abs, prob.cΔx)) > 0.9 * prob.nui  
+    # Dynamic Particle Collision (DPC) 
+    dpc_l₀::Float64       # minimal distance
+    dpc_pmin::Float64     # minimal pressure
+    dpc_pmax::Float64     # maximum pressure
+    dpc_λ::Float64        # λ is a non-dimensional adjusting parameter
     function SPHProblem(system, h, H, sphkernel, ρ, v, ml, gf, isboundary, ρ₀::Float64, m₀::Float64, Δt::Float64, α::Float64, g::Float64, c₀::Float64, γ, δᵩ::Float64, CFL::Float64; s::Float64 = 0.0)
 
         dim = length(CUDA.@allowscalar first(system.points))
@@ -68,10 +73,8 @@ mutable struct SPHProblem
         ∇Wₙ     = CUDA.fill(zero(NTuple{dim, Float64}), length(system.pairs))
         ∑∂ρ∂t   = CUDA.zeros(Float64, N)
 
-        #∑∂Π∂t   = CUDA.zeros(Float64, N, dim)
         ∑∂Π∂t   = Tuple(CUDA.zeros(Float64, N) for n in 1:dim)
 
-        #∑∂v∂t   = CUDA.zeros(Float64, N, dim)
         ∑∂v∂t   = Tuple(CUDA.zeros(Float64, N) for n in 1:dim)
 
         ∑Δvdpc = Tuple(CUDA.zeros(Float64, N) for n in 1:dim)
@@ -83,7 +86,7 @@ mutable struct SPHProblem
         xΔt½    = CUDA.deepcopy(system.points)
         cΔx     = Tuple(CUDA.zeros(Float64, N) for n in 1:dim)
         P       = CUDA.zeros(Float64, N)
-        new{}(system, dim, h, 1/h, H, 1/H, sphkernel, ∑W, ∑∇W, ∇Wₙ, ∑∂Π∂t, ∑∂v∂t, ∑∂ρ∂t, ∑Δvdpc, ρ, ρΔt½, v, vΔt½, xΔt½, P, ml, gf, isboundary, ρ₀, m₀, Δt, α, g, c₀, γ, s, δᵩ, CFL, buf, 0.0, cΔx, system.dist - H)
+        new{}(system, dim, h, 1/h, H, 1/H, sphkernel, ∑W, ∑∇W, ∇Wₙ, ∑∂Π∂t, ∑∂v∂t, ∑∂ρ∂t, ∑Δvdpc, ρ, ρΔt½, v, vΔt½, xΔt½, P, ml, gf, isboundary, ρ₀, m₀, Δt, α, g, c₀, γ, s, δᵩ, CFL, buf, 0.0, cΔx, system.dist - H, 0.0, 1.0, 10000.0, 0.025)
     end
 end
 
@@ -200,8 +203,10 @@ function _stepsolve!(prob::SPHProblem, n::Int, ::StepByStep; timestepping = fals
         update_all!(prob.ρ, prob.ρΔt½, prob.v, prob.vΔt½, x, prob.xΔt½, prob.∑∂ρ∂t, prob.∑∂v∂t, prob.Δt, prob.cΔx, prob.ρ₀, prob.isboundary, prob.ml)
         
         # Dynamic Particle Collision (DPC) 
-        dpcreg!(prob.∑Δvdpc, prob.v, prob.ρ, prob.P, pairs, x, prob.sphkernel, 0.01, 10.0, 10000.0, prob.Δt, 0.02, dpckernlim)  
-        update_dpcreg!(prob.v, x, prob.∑Δvdpc, prob.Δt, prob.isboundary) 
+        if prob.dpc_l₀ > 0
+            dpcreg!(prob.∑Δvdpc, prob.v, prob.ρ, prob.P, pairs, x, prob.sphkernel, prob.dpc_l₀, prob.dpc_pmin, prob.dpc_pmax, prob.Δt, prob.dpc_λ, dpckernlim)  
+            update_dpcreg!(prob.v, x, prob.∑Δvdpc, prob.Δt, prob.isboundary)
+        end
 
         maxcΔx = maximum(maximum.(abs, prob.cΔx))
         if maxcΔx > 0.9 * prob.nui  
@@ -273,7 +278,18 @@ anim - make animation.
 
 showframe - show animation each frame.
 """
-function timesolve!(prob::SPHProblem; batch = 10, timeframe = 1.0, writetime = 0, path = nothing, pvc::Bool = false, timestepping = false, timelims = (sqrt(eps()), prob.CFL * prob.H /3prob.c₀), anim::Bool = false, showframe::Bool = true, verbose = true, plotsettings = Dict(:leg => false)) 
+function timesolve!(prob::SPHProblem; batch = 10, timeframe = 1.0, 
+    writetime = 0, 
+    path = nothing, 
+    pvc::Bool = false, 
+    vtkvars = ["Acceleration", "Velocity", "Pressure"],
+    timestepping = false, 
+    timelims = (sqrt(eps()), 
+    prob.CFL * prob.H /3prob.c₀), 
+    anim::Bool = false, 
+    showframe::Bool = true, 
+    verbose = true, 
+    plotsettings = Dict(:leg => false)) 
 
     if timelims[2] > prob.CFL * prob.H /3prob.c₀ 
         @warn "Maximum dt limit ($(timelims[2])) > CFL*H/3c₀ ($(prob.CFL * prob.H /3prob.c₀))" 
@@ -293,14 +309,16 @@ function timesolve!(prob::SPHProblem; batch = 10, timeframe = 1.0, writetime = 0
         expdict                 = Dict()
         cpupoints               = Array(get_points(prob))
         coordsarr               = [map(x -> x[i], cpupoints) for i in 1:length(first(cpupoints))]
-        expdict["Density"]      = Array(get_density(prob))
-        expdict["Pressure"]     = Array(get_pressure(prob))
-        expdict["Acceleration"] = Array.(get_acceleration(prob))
-        av                      = Array(get_velocity(prob))
-        expdict["Velocity"]     = permutedims(hcat([map(x -> x[i], av) for i in 1:length(first(av))]...))
-        expdict["∑W"]           = Array(get_sumw(prob))
-        expdict["∑∇W"]          = Array.(get_sumgradw(prob))
-        expdict["DPC"]          = Array.(get_dpccorr(prob))
+        if "Density"      in vtkvars expdict["Density"]      = Array(get_density(prob)) end
+        if "Pressure"     in vtkvars expdict["Pressure"]     = Array(get_pressure(prob)) end
+        if "Acceleration" in vtkvars expdict["Acceleration"] = Array.(get_acceleration(prob)) end
+        if "Velocity" in vtkvars 
+            av                      = Array(get_velocity(prob))
+            expdict["Velocity"]     = permutedims(hcat([map(x -> x[i], av) for i in 1:length(first(av))]...))
+        end
+        if "∑W" in vtkvars expdict["∑W"]           = Array(get_sumw(prob)) end
+        if "∑∇W" in vtkvars expdict["∑∇W"]         = Array.(get_sumgradw(prob)) end
+        if "DPC" in vtkvars expdict["DPC"]         = Array.(get_dpccorr(prob)) end
        
         if pvc
             pvd = paraview_collection(joinpath(path, "OUTPUT_PVC"))
@@ -328,14 +346,16 @@ function timesolve!(prob::SPHProblem; batch = 10, timeframe = 1.0, writetime = 0
                 expdict                 = Dict()
                 cpupoints               = Array(get_points(prob))
                 coordsarr               = [map(x -> x[i], cpupoints) for i in 1:length(first(cpupoints))]
-                expdict["Density"]      = Array(get_density(prob))
-                expdict["Pressure"]     = Array(get_pressure(prob))
-                expdict["Acceleration"] = Array.(get_acceleration(prob))
-                av                      = Array(get_velocity(prob))
-                expdict["Velocity"]     = permutedims(hcat([map(x -> x[i], av) for i in 1:length(first(av))]...))
-                expdict["∑W"]           = Array(get_sumw(prob))
-                expdict["∑∇W"]          = Array.(get_sumgradw(prob))
-                expdict["DPC"]          = Array.(get_dpccorr(prob))
+                if "Density"      in vtkvars expdict["Density"]      = Array(get_density(prob)) end
+                if "Pressure"     in vtkvars expdict["Pressure"]     = Array(get_pressure(prob)) end
+                if "Acceleration" in vtkvars expdict["Acceleration"] = Array.(get_acceleration(prob)) end
+                 if "Velocity" in vtkvars 
+                    av                      = Array(get_velocity(prob))
+                    expdict["Velocity"]     = permutedims(hcat([map(x -> x[i], av) for i in 1:length(first(av))]...))
+                end
+                if "∑W" in vtkvars expdict["∑W"]           = Array(get_sumw(prob)) end
+                if "∑∇W" in vtkvars expdict["∑∇W"]         = Array.(get_sumgradw(prob)) end
+                if "DPC" in vtkvars expdict["DPC"]         = Array.(get_dpccorr(prob)) end
 
                 create_vtp_file(joinpath(path, "OUTPUT_"*lpad(i, 5, "0")), coordsarr, expdict, pvd, prob.etime)
             end

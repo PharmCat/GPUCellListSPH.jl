@@ -930,7 +930,11 @@ function ∂v∂tpF!(∑∂v∂t, pairs, points, s, h, m₀, isboundary)
 end
 
 ###################################################################################
-
+# Dynamic Particle Collision (DPC) 
+# https://arxiv.org/pdf/2110.10076.pdf
+# Stability and accuracy of the weakly compressible SPH with par-
+# ticle regularization techniques
+# Mojtaba Jandaghian, Herman Musumari Siaben, Ahmad Shakibaeinia
 ###################################################################################
 
 function kernel_dpcreg!(∑Δvdpc, v, ρ, P, pairs, points, sphkernel, wh⁻¹, l₀, l₀⁻¹, Pmin, Pmax, Δt, λ, dpckernlim) 
@@ -971,7 +975,6 @@ function kernel_dpcreg!(∑Δvdpc, v, ρ, P, pairs, points, sphkernel, wh⁻¹, 
                 # V = m / ρ
                 # Δvdpc = Δt * ∑ 2 / (ρᵢ + ρⱼ) * Pᵇ / (r² + η²) * Δx
                 tvar = 2Δt* Pᵇ / ((ρᵢ + ρⱼ) * (r² + η²))
-
                 Δvdpc = (tvar * Δx[1], tvar * Δx[2])
             end
             
@@ -981,15 +984,17 @@ function kernel_dpcreg!(∑Δvdpc, v, ρ, P, pairs, points, sphkernel, wh⁻¹, 
             CUDA.@atomic ∑Δvdpcʸ[pᵢ] -=  Δvdpc[2]
             CUDA.@atomic ∑Δvdpcˣ[pⱼ] +=  Δvdpc[1]
             CUDA.@atomic ∑Δvdpcʸ[pⱼ] +=  Δvdpc[2]
-
         end
     end
     return nothing
 end
 """
     
-    dpcreg!(∑∂v∂tdpc, ρ, P, pairs, points, sphkernel, H⁻¹, Pmin, Pmax, Δt) 
+    dpcreg!(∑Δvdpc, v, ρ, P, pairs, points, sphkernel, l₀, Pmin, Pmax, Δt, λ, dpckernlim) 
 
+Dynamic Particle Collision (DPC) correction.
+
+Mojtaba Jandaghian, Herman Musumari Siaben, Ahmad Shakibaeinia, Stability and accuracy of the weakly compressible SPH with particle regularization techniques https://arxiv.org/pdf/2110.10076.pdf
 """
 function dpcreg!(∑Δvdpc, v, ρ, P, pairs, points, sphkernel, l₀, Pmin, Pmax, Δt, λ, dpckernlim)
     l₀⁻¹     = 1 / l₀  
@@ -1002,7 +1007,6 @@ function dpcreg!(∑Δvdpc, v, ρ, P, pairs, points, sphkernel, l₀, Pmin, Pmax
     Bx = cld(Nx, Tx)
     CUDA.@sync gpukernel(∑Δvdpc, v, ρ, P, pairs, points, sphkernel, wh⁻¹, l₀, l₀⁻¹, Pmin, Pmax, Δt, λ, dpckernlim; threads = Tx, blocks = Bx)
 end
-
 
 function kernel_update_dpcreg!(v, x, ∑Δvdpc, Δt, isboundary) 
     index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
@@ -1021,6 +1025,7 @@ end
 """
     update_dpcreg!(v, x, ∑Δvdpc, Δt, isboundary) 
 
+Update velocity and position.
 """
 function update_dpcreg!(v, x, ∑Δvdpc, Δt, isboundary) 
     if length(x) != length(v) error("Wrong length") end
