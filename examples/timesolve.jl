@@ -1,15 +1,12 @@
 using GPUCellListSPH
 using CSV, DataFrames, CUDA, BenchmarkTools
 using SPHKernels, WriteVTK
-path         = dirname(@__FILE__)
 
 path = joinpath(dirname(pathof(GPUCellListSPH)))
-
-
 fluid_csv    = joinpath(path, "../test/input/FluidPoints_Dp0.02.csv")
 boundary_csv = joinpath(path, "../test/input/BoundaryPoints_Dp0.02.csv")
-
-cpupoints, DF_FLUID, DF_BOUND    = GPUCellListSPH.loadparticles(fluid_csv, boundary_csv) # Load particles 
+DF_POINTS = append!(CSV.File(fluid_csv) |> DataFrame, CSV.File(boundary_csv) |> DataFrame)
+cpupoints = Tuple.(eachrow(DF_POINTS[!, ["Points:0", "Points:2"]])) # Load particles 
 
 dx  = 0.02                  # resolution
 h   = 1.2 * sqrt(2) * dx    # smoothinl length
@@ -32,19 +29,14 @@ sphkernel    = WendlandC2(Float64, 2) # SPH kernel from SPHKernels.jl
 system  = GPUCellList(cpupoints, cellsize, dist)
 N       = length(cpupoints)
 ρ       = CUDA.zeros(Float64, N)
-copyto!(ρ, Array([DF_FLUID.Rhop;DF_BOUND.Rhop]))
+copyto!(ρ, DF_POINTS.Rhop)
 
-ml        = CUDA.zeros(Float64, N)
-copyto!(ml, append!(ones(Float64, size(DF_FLUID, 1)), zeros(Float64, size(DF_BOUND, 1))))
+ptype   = CUDA.zeros(Int32, N)
+copyto!(ptype, DF_POINTS.ptype)
 
-isboundary  = .!Bool.(ml)
+v       = CUDA.fill((0.0, 0.0), length(cpupoints))
 
-gf        = CUDA.zeros(Float64, N)
-copyto!(gf,[-ones(size(DF_FLUID,1)) ; ones(size(DF_BOUND,1))])
-
-v           = CUDA.fill((0.0, 0.0), length(cpupoints))
-
-sphprob =  SPHProblem(system, h, H, sphkernel, ρ, v, ml, gf, isboundary, ρ₀, m₀, Δt, α, g, c₀, γ, δᵩ, CFL)
+sphprob =  SPHProblem(system, h, H, sphkernel, ρ, v, ptype, ρ₀, m₀, Δt, α, g, c₀, γ, δᵩ, CFL; s = 0.0)
 
 # batch - number of iteration until check time and vtp
 # timeframe - simulation time
@@ -54,7 +46,7 @@ sphprob =  SPHProblem(system, h, H, sphkernel, ρ, v, ml, gf, isboundary, ρ₀,
 sphprob.dpc_l₀   = 0.014142135623730952
 sphprob.dpc_λ    = 0.025
 sphprob.dpc_pmax = 36000
-timesolve!(sphprob; batch = 100, timeframe = 3.0, writetime = 0.025, path = "D:/vtk/", pvc = true)
+timesolve!(sphprob; batch = 100, timeframe = 1.0, writetime = 0.0, path = "D:/vtk/", pvc = true)
 
 # timestepping adjust dt
 # time lims for dt

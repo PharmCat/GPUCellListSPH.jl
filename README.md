@@ -4,6 +4,10 @@
 
 This is concept-project for particle cell neiborhood list and SPH. Based on [AhmedSalih3d](https://github.com/AhmedSalih3d) repo [SPHExample](https://github.com/AhmedSalih3d/SPHExample).
 
+## Documentation
+
+[![Latest docs](https://img.shields.io/badge/docs-latest-blue.svg)](https://pharmcat.github.io/GPUCellListSPH.jl/dev/)
+
 
 ## Install
 

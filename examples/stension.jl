@@ -4,8 +4,8 @@ using SPHKernels, WriteVTK
 path         = dirname(@__FILE__)
 fluid_csv    = joinpath(path, "../test/input/FluidPoints_Dp0.02.csv")
 boundary_csv = joinpath(path, "../test/input/BoundaryPoints_Dp0.02.csv")
-
-cpupoints, DF_FLUID, DF_BOUND    = GPUCellListSPH.loadparticles(fluid_csv, boundary_csv)
+DF_POINTS = append!(CSV.File(fluid_csv) |> DataFrame, CSV.File(boundary_csv) |> DataFrame)
+cpupoints = Tuple.(eachrow(DF_POINTS[!, ["Points:0", "Points:2"]])) # Load particles 
 
 dx  = 0.02
 h   = 1.2 * sqrt(2) * dx
@@ -25,22 +25,18 @@ c₀  = sqrt(g * 2) * 20
 CFL = 0.2
 cellsize = (H, H)
 sphkernel    = WendlandC2(Float64, 2)
-cpupoints    = cpupoints[1:4704]
-system  = GPUCellList(cpupoints, cellsize, H)
+
+system  = GPUCellList(cpupoints, cellsize, dist)
 N       = length(cpupoints)
 ρ       = CUDA.zeros(Float64, N)
-copyto!(ρ, DF_FLUID.Rhop)
+copyto!(ρ, DF_POINTS.Rhop)
 
-ml        = CUDA.ones(Float64, N)
+ptype   = CUDA.zeros(Int32, N)
+copyto!(ptype, DF_POINTS.ptype)
 
-isboundary  = .!Bool.(ml)
+v       = CUDA.fill((0.0, 0.0), length(cpupoints))
 
-gf        = CUDA.zeros(Float64, N)
-copyto!(gf,-ones(size(DF_FLUID,1)) )
-
-v           = CUDA.fill((0.0, 0.0), length(cpupoints))
-
-sphprob =  SPHProblem(system, h, H, sphkernel, ρ, v, ml, gf, isboundary, ρ₀, m₀, Δt, α, g, c₀, γ, δᵩ, CFL; s = s)
+sphprob =  SPHProblem(system, h, H, sphkernel, ρ, v, ptype, ρ₀, m₀, Δt, α, g, c₀, γ, δᵩ, CFL; s = s)
 
 prob = sphprob
 
