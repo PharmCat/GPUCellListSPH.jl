@@ -74,7 +74,7 @@ mutable struct SPHProblem
 
         ∑W      = CUDA.zeros(Float64, N)
         ∑∇W     = Tuple(CUDA.zeros(Float64, N) for n in 1:dim)
-        W       = CUDA.zeros(Float64, N)
+        W       = CUDA.zeros(Float64, length(system.pairs))
         ∇W      = CUDA.fill(zero(NTuple{dim, Float64}), length(system.pairs))
         ∑∂ρ∂t   = CUDA.zeros(Float64, N)
 
@@ -172,9 +172,6 @@ function _stepsolve!(prob::SPHProblem, n::Int, ::StepByStep; timestepping = fals
             updaten += 1 
         end
 
-        fill!(prob.∑W, zero(Float64))
-        fill!(prob.∑∇W[1], zero(Float64))
-        fill!(prob.∑∇W[2], zero(Float64))
 
         fill!(prob.∑∂ρ∂t, zero(Float64))
 
@@ -189,12 +186,14 @@ function _stepsolve!(prob::SPHProblem, n::Int, ::StepByStep; timestepping = fals
 
         if length(prob.∇W) != length(pairs)
             CUDA.unsafe_free!(prob.∇W)
-            prob.∇Wₙ =  CUDA.fill((zero(Float64), zero(Float64)), length(pairs)) # DIM = 2
+            CUDA.unsafe_free!(prob.W)
+            prob.∇W =  CUDA.fill((zero(Float64), zero(Float64)), length(pairs)) # DIM = 2
+            prob.W =  CUDA.fill(zero(Float64), length(pairs))
         end
-        # kernels sum for each cell
-        ∑W_2d!(prob.∑W, pairs, x, prob.sphkernel, prob.H⁻¹)
-        # kernels gradient  for each cell (∑∇W) and value for each pair (∇W)
-        ∑∇W_2d!(prob.∑∇W, prob.∇W, pairs, x, prob.sphkernel, prob.H⁻¹)
+        # kernels for each pair
+        W_2d!(prob.W, pairs, x, prob.sphkernel, prob.H⁻¹)
+        # kernels gradientfor each pair
+        ∇W_2d!(prob.∇W, pairs, x, prob.sphkernel, prob.H⁻¹)
         # density derivative with density diffusion
         ∂ρ∂tDDT!(prob.∑∂ρ∂t, prob.∇W, pairs, x, prob.h, prob.m₀, prob.δᵩ, prob.c₀, prob.γ, prob.g, prob.ρ₀, prob.ρ, prob.v, prob.ptype) 
         # artificial viscosity
@@ -266,6 +265,12 @@ function _stepsolve!(prob::SPHProblem, n::Int, ::StepByStep; timestepping = fals
         end
 
     end
+    # update summs and gradiends after bath 
+    fill!(prob.∑W, zero(Float64))
+    fill!(prob.∑∇W[1], zero(Float64))
+    fill!(prob.∑∇W[2], zero(Float64))
+    ∑W_2d!(prob.∑W, pairs, x, prob.sphkernel, prob.H⁻¹)
+    ∑∇W_2d!(prob.∑∇W, pairs, x, prob.sphkernel, prob.H⁻¹)
     updaten, maxcΔxout
 end
 

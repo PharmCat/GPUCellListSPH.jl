@@ -268,6 +268,21 @@ end
 #####################################################################
 # SPH
 #####################################################################
+"""
+
+    W_2d!(sumW, pairs, sphkernel, H⁻¹) 
+
+Compute W for each particles pair in list.
+"""
+function W_2d!(W, pairs, points, sphkernel, H⁻¹) 
+    gpukernel = @cuda launch=false kernel_W_2d!(W, pairs, points, sphkernel, H⁻¹) 
+    config = launch_configuration(gpukernel.fun)
+    Nx = length(pairs)
+    maxThreads = config.threads
+    Tx  = min(maxThreads, Nx)
+    Bx = cld(Nx, Tx)
+    CUDA.@sync gpukernel(W, pairs, points, sphkernel, H⁻¹; threads = Tx, blocks = Bx)
+end
 function kernel_W_2d!(W, pairs, points, sphkernel, H⁻¹) 
     index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
     if index <= length(pairs)
@@ -285,25 +300,24 @@ function kernel_W_2d!(W, pairs, points, sphkernel, H⁻¹)
     end
     return nothing
 end
+#####################################################################
+#
+#####################################################################
 """
 
-    W_2d!(sumW, pairs, sphkernel, H⁻¹) 
+    ∑W_2d!(sumW, pairs, sphkernel, H⁻¹) 
 
-Compute W for each particles pair in list.
+Compute ∑W for each particles pair in list.
 """
-function W_2d!(W, pairs, points, sphkernel, H⁻¹) 
-    gpukernel = @cuda launch=false kernel_W_2d!(W, pairs, points, sphkernel, H⁻¹) 
+function ∑W_2d!(∑W, pairs, points, sphkernel, H⁻¹) 
+    gpukernel = @cuda launch=false kernel_∑W_2d!(∑W, pairs, points, sphkernel, H⁻¹) 
     config = launch_configuration(gpukernel.fun)
     Nx = length(pairs)
     maxThreads = config.threads
     Tx  = min(maxThreads, Nx)
     Bx = cld(Nx, Tx)
-    CUDA.@sync gpukernel(W, pairs, points, sphkernel, H⁻¹; threads = Tx, blocks = Bx)
+    CUDA.@sync gpukernel(∑W, pairs, points, sphkernel, H⁻¹; threads = Tx, blocks = Bx)
 end
-
-#####################################################################
-#
-#####################################################################
 function kernel_∑W_2d!(∑W, pairs, points, sphkernel, H⁻¹) 
     index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
     if index <= length(pairs)
@@ -322,23 +336,23 @@ function kernel_∑W_2d!(∑W, pairs, points, sphkernel, H⁻¹)
     end
     return nothing
 end
+#####################################################################
 """
+    
+    ∇W_2d!(∇W, pairs, points, kernel, H⁻¹) 
 
-    ∑W_2d!(sumW, pairs, sphkernel, H⁻¹) 
+Compute gradients. Update ∇W.
 
-Compute ∑W for each particles pair in list.
 """
-function ∑W_2d!(∑W, pairs, points, sphkernel, H⁻¹) 
-    gpukernel = @cuda launch=false kernel_∑W_2d!(∑W, pairs, points, sphkernel, H⁻¹) 
+function ∇W_2d!(∇W, pairs, points, kernel, H⁻¹) 
+    gpukernel = @cuda launch=false kernel_∇W_2d!(∇W, pairs, points, kernel, H⁻¹) 
     config = launch_configuration(gpukernel.fun)
     Nx = length(pairs)
     maxThreads = config.threads
     Tx  = min(maxThreads, Nx)
     Bx = cld(Nx, Tx)
-    CUDA.@sync gpukernel(∑W, pairs, points, sphkernel, H⁻¹; threads = Tx, blocks = Bx)
+    CUDA.@sync gpukernel(∇W, pairs, points, kernel, H⁻¹; threads = Tx, blocks = Bx)
 end
-#####################################################################
-
 function kernel_∇W_2d!(∇W, pairs, points, kernel, H⁻¹) 
     index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
     if index <= length(pairs)
@@ -352,64 +366,16 @@ function kernel_∇W_2d!(∇W, pairs, points, kernel, H⁻¹)
             u         = r * H⁻¹
             dwk_r     = d𝒲(kernel, u, H⁻¹) / r
             ∇W[index] = (Δx[1] * dwk_r, Δx[2] * dwk_r)
-
         end
     end
     return nothing
-end
-"""
-    
-    ∇W_2d!(∇W, pairs, points, kernel, H⁻¹) 
-
-Compute gradients.
-
-"""
-function ∇W_2d!(∇W, pairs, points, kernel, H⁻¹) 
-    gpukernel = @cuda launch=false kernel_∑∇W_2d!(∇W, pairs, points, kernel, H⁻¹) 
-    config = launch_configuration(gpukernel.fun)
-    Nx = length(pairs)
-    maxThreads = config.threads
-    Tx  = min(maxThreads, Nx)
-    Bx = cld(Nx, Tx)
-    CUDA.@sync gpukernel(∇W, pairs, points, kernel, H⁻¹; threads = Tx, blocks = Bx)
 end
 #####################################################################
-function kernel_∑∇W_2d!(∑∇W, ∇Wₙ, pairs, points, kernel, H⁻¹) 
-    index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
-    if index <= length(pairs)
-        pair  = pairs[index]
-        pᵢ    = pair[1]; pⱼ = pair[2]; r = pair[3]
-        if !isnan(r)
-
-            xᵢ    = points[pᵢ]
-            xⱼ    = points[pⱼ]
-            Δx    = (xᵢ[1] - xⱼ[1], xᵢ[2] - xⱼ[2])
-            r     = sqrt(Δx[1]^2 + Δx[2]^2) 
-            u     = r * H⁻¹
-            dwk_r = d𝒲(kernel, u, H⁻¹) / r
-            ∇w    = (Δx[1] * dwk_r, Δx[2] * dwk_r)
-
-            if isnan(dwk_r) 
-                @cuprintln "kernel W_2d  dwk_r = $dwk_r, pair = $pair"
-                error() 
-            end
-
-            ∑∇Wˣ = ∑∇W[1]
-            ∑∇Wʸ = ∑∇W[2]
-            CUDA.@atomic ∑∇Wˣ[pᵢ] += ∇w[1]
-            CUDA.@atomic ∑∇Wʸ[pᵢ] += ∇w[2]
-            CUDA.@atomic ∑∇Wˣ[pⱼ] -= ∇w[1]
-            CUDA.@atomic ∑∇Wʸ[pⱼ] -= ∇w[2]
-            ∇Wₙ[index] = ∇w
-        end
-    end
-    return nothing
-end
 """
     
-    ∑∇W_2d!(sum∇W, ∇Wₙ, pairs, points, kernel, H⁻¹) 
+    ∑∇W_2d!(∑∇W, ∇W, pairs, points, kernel, H⁻¹) 
 
-Compute gradients.
+Compute gradients. Update ∑∇W and ∇W.
 
 """
 function ∑∇W_2d!(∑∇W, ∇W, pairs, points, kernel, H⁻¹) 
@@ -420,6 +386,75 @@ function ∑∇W_2d!(∑∇W, ∇W, pairs, points, kernel, H⁻¹)
     Tx  = min(maxThreads, Nx)
     Bx = cld(Nx, Tx)
     CUDA.@sync gpukernel(∑∇W, ∇W, pairs, points, kernel, H⁻¹; threads = Tx, blocks = Bx)
+end
+function kernel_∑∇W_2d!(∑∇W, ∇W, pairs, points, kernel, H⁻¹) 
+    index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
+    if index <= length(pairs)
+        pair  = pairs[index]
+        pᵢ    = pair[1]; pⱼ = pair[2]; r = pair[3]
+        if !isnan(r)
+            xᵢ    = points[pᵢ]
+            xⱼ    = points[pⱼ]
+            Δx    = (xᵢ[1] - xⱼ[1], xᵢ[2] - xⱼ[2])
+            r     = sqrt(Δx[1]^2 + Δx[2]^2) 
+            u     = r * H⁻¹
+            dwk_r = d𝒲(kernel, u, H⁻¹) / r
+            ∇w    = (Δx[1] * dwk_r, Δx[2] * dwk_r)
+            if isnan(dwk_r) 
+                @cuprintln "kernel W_2d  dwk_r = $dwk_r, pair = $pair"
+                error() 
+            end
+            ∑∇Wˣ = ∑∇W[1]
+            ∑∇Wʸ = ∑∇W[2]
+            CUDA.@atomic ∑∇Wˣ[pᵢ] += ∇w[1]
+            CUDA.@atomic ∑∇Wʸ[pᵢ] += ∇w[2]
+            CUDA.@atomic ∑∇Wˣ[pⱼ] -= ∇w[1]
+            CUDA.@atomic ∑∇Wʸ[pⱼ] -= ∇w[2]
+            ∇W[index] = ∇w
+        end
+    end
+    return nothing
+end
+#####################################################################
+function kernel_∑∇W_2d!(∑∇W, pairs, points, kernel, H⁻¹) 
+    index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
+    if index <= length(pairs)
+        pair  = pairs[index]
+        pᵢ    = pair[1]; pⱼ = pair[2]; r = pair[3]
+        if !isnan(r)
+            xᵢ    = points[pᵢ]
+            xⱼ    = points[pⱼ]
+            Δx    = (xᵢ[1] - xⱼ[1], xᵢ[2] - xⱼ[2])
+            r     = sqrt(Δx[1]^2 + Δx[2]^2) 
+            u     = r * H⁻¹
+            dwk_r = d𝒲(kernel, u, H⁻¹) / r
+            ∇w    = (Δx[1] * dwk_r, Δx[2] * dwk_r)
+            ∑∇Wˣ = ∑∇W[1]
+            ∑∇Wʸ = ∑∇W[2]
+            CUDA.@atomic ∑∇Wˣ[pᵢ] += ∇w[1]
+            CUDA.@atomic ∑∇Wʸ[pᵢ] += ∇w[2]
+
+            CUDA.@atomic ∑∇Wˣ[pⱼ] -= ∇w[1]
+            CUDA.@atomic ∑∇Wʸ[pⱼ] -= ∇w[2]
+        end
+    end
+    return nothing
+end
+"""
+    
+    ∑∇W_2d!(∑∇W, pairs, points, kernel, H⁻¹) 
+
+Compute gradients. Update ∑∇W.
+
+"""
+function ∑∇W_2d!(∑∇W, pairs, points, kernel, H⁻¹) 
+    gpukernel = @cuda launch=false kernel_∑∇W_2d!(∑∇W, pairs, points, kernel, H⁻¹) 
+    config = launch_configuration(gpukernel.fun)
+    Nx = length(pairs)
+    maxThreads = config.threads
+    Tx  = min(maxThreads, Nx)
+    Bx = cld(Nx, Tx)
+    CUDA.@sync gpukernel(∑∇W, pairs, points, kernel, H⁻¹; threads = Tx, blocks = Bx)
 end
 
 
@@ -1099,6 +1134,7 @@ k_{ij} =  \\begin{cases} \\chi_{ij} & 0.5 \\le {r}_{ij}/l_0 < 1 \\\\ 1 & {r}_{ij
 ```
 
 Mojtaba Jandaghian, Herman Musumari Siaben, Ahmad Shakibaeinia, Stability and accuracy of the weakly compressible SPH with particle regularization techniques https://arxiv.org/pdf/2110.10076.pdf
+
 """
 function dpcreg!(∑Δvdpc, v, ρ, P, pairs, points, sphkernel, l₀, Pmin, Pmax, Δt, λ, dpckernlim)
     l₀⁻¹     = 1 / l₀  
