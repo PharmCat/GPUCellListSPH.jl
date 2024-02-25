@@ -1,6 +1,8 @@
 using GPUCellListSPH
 using CSV, DataFrames, CUDA, BenchmarkTools
 using SPHKernels, WriteVTK
+using Profile
+using PProf
 path         = dirname(@__FILE__)
 fluid_csv    = joinpath(path, "../test/input/FluidPoints_Dp0.02.csv")
 boundary_csv = joinpath(path, "../test/input/BoundaryPoints_Dp0.02.csv")
@@ -18,3 +20,12 @@ cellsize = (dist, dist)
 system  = GPUCellList(cpupoints, cellsize, dist)
 
 update!(system)
+
+@benchmark update!($system)
+
+@profile for i=1:1000 update!(system) end
+
+pprof()
+
+#PProf.kill()
+#Profile.clear()

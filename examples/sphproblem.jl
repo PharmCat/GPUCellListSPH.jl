@@ -49,7 +49,7 @@ get_density(sphprob)
 get_acceleration(sphprob)
 
 
-@benchmark stepsolve!($sphprob, 1000)
+@benchmark stepsolve!($sphprob, 100)
 
 #=
 BenchmarkTools.Trial: 2 samples with 1 evaluation.

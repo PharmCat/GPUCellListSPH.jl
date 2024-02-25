@@ -3,22 +3,6 @@
 #####################################################################
 # CELL LIST
 #####################################################################
-function kernel_cellmap_2d!(pcell, cellpnum, points,  h⁻¹, offset) 
-    i = threadIdx().x + (blockIdx().x - 1) * blockDim().x
-    csᵢ = size(cellpnum, 1) 
-    csⱼ = size(cellpnum, 2) 
-    if i <= length(points)
-        @fastmath  p₁ =  (points[i][1] - offset[1]) * h⁻¹[1]
-        @fastmath  p₂ =  (points[i][2] - offset[2]) * h⁻¹[2]
-        pᵢ₁ = ceil(Int32, min(max(p₁, 1), csᵢ)) 
-        pᵢ₂ = ceil(Int32, min(max(p₂, 1), csⱼ))
-        # maybe add check:  is particle in simulation range? and include only if in simulation area
-        pcell[i] = (pᵢ₁, pᵢ₂)
-
-        CUDA.@atomic cellpnum[pᵢ₁, pᵢ₂] += one(Int32) 
-    end
-    return nothing
-end
 """
     cellmap_2d!(pcell, cellpnum, points,  h, offset)  
 
@@ -41,20 +25,23 @@ function cellmap_2d!(pcell, cellpnum, points,  h, offset)
     blocks = cld(size(points, 1), threads)
     CUDA.@sync kernel(pcell, cellpnum, points,  h⁻¹, offset; threads = threads, blocks = blocks)
 end
+function kernel_cellmap_2d!(pcell, cellpnum, points,  h⁻¹, offset) 
+    i = threadIdx().x + (blockIdx().x - 1) * blockDim().x
+    csᵢ = size(cellpnum, 1) 
+    csⱼ = size(cellpnum, 2) 
+    if i <= length(points)
+        @fastmath  p₁ =  (points[i][1] - offset[1]) * h⁻¹[1]
+        @fastmath  p₂ =  (points[i][2] - offset[2]) * h⁻¹[2]
+        pᵢ₁ = ceil(Int32, min(max(p₁, 1), csᵢ)) 
+        pᵢ₂ = ceil(Int32, min(max(p₂, 1), csⱼ))
+        # maybe add check:  is particle in simulation range? and include only if in simulation area
+        pcell[i] = (pᵢ₁, pᵢ₂)
 
-#####################################################################
-
-
-function kernel_fillcells_naive_2d!(celllist, cellpnum, pcell) 
-    indexᵢ = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
-    if indexᵢ <= length(pcell)
-        # no bound check - all should be done before
-        pᵢ, pⱼ = pcell[indexᵢ]
-        n = CUDA.@atomic cellpnum[pᵢ, pⱼ] += 1
-        celllist[n + 1, pᵢ, pⱼ] = indexᵢ
+        CUDA.@atomic cellpnum[pᵢ₁, pᵢ₂] += one(Int32) 
     end
     return nothing
 end
+#####################################################################
 """
     fillcells_naive_2d!(celllist, cellpnum, pcell) 
     
@@ -69,10 +56,37 @@ function fillcells_naive_2d!(celllist, cellpnum, pcell)
     blocks = cld(length(pcell), threads)
     CUDA.@sync gpukernel(celllist, cellpnum, pcell; threads = threads, blocks = blocks)
 end
-
+function kernel_fillcells_naive_2d!(celllist, cellpnum, pcell) 
+    indexᵢ = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
+    if indexᵢ <= length(pcell)
+        # no bound check - all should be done before
+        pᵢ, pⱼ = pcell[indexᵢ]
+        n = CUDA.@atomic cellpnum[pᵢ, pⱼ] += 1
+        celllist[n + 1, pᵢ, pⱼ] = indexᵢ
+    end
+    return nothing
+end
 #####################################################################
 #####################################################################
+"""
+    мaxpairs_2d(cellpnum)
 
+Maximum number of pairs.
+"""
+function мaxpairs_2d(cellpnum)
+    cnt        = CUDA.zeros(Int, 1)
+    Nx, Ny     = size(cellpnum)
+    gpukernel  = @cuda launch=false kernel_мaxpairs_2d!(cellpnum, cnt)
+    config     = launch_configuration(gpukernel.fun)
+    maxThreads = config.threads
+    Tx         = min(maxThreads, Nx)
+    Ty         = min(fld(maxThreads, Tx), Ny)
+    Bx, By     = cld(Nx, Tx), cld(Ny, Ty) 
+    threads    = (Tx, Ty)
+    blocks     = (Bx, By)
+    CUDA.@sync gpukernel(cellpnum, cnt; threads = threads, blocks = blocks)
+    CUDA.@allowscalar cnt[1]
+end
 function kernel_мaxpairs_2d!(cellpnum, cnt)
     indexᵢ = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
     indexⱼ = (blockIdx().y - Int32(1)) * blockDim().y + threadIdx().y 
@@ -107,61 +121,18 @@ function kernel_мaxpairs_2d!(cellpnum, cnt)
     end
     return nothing
 end
-"""
-    мaxpairs_2d(cellpnum)
-
-Maximum number of pairs.
-"""
-function мaxpairs_2d(cellpnum)
-    cnt        = CUDA.zeros(Int, 1)
-    Nx, Ny     = size(cellpnum)
-    gpukernel  = @cuda launch=false kernel_мaxpairs_2d!(cellpnum, cnt)
-    config     = launch_configuration(gpukernel.fun)
-    maxThreads = config.threads
-    Tx         = min(maxThreads, Nx)
-    Ty         = min(fld(maxThreads, Tx), Ny)
-    Bx, By     = cld(Nx, Tx), cld(Ny, Ty) 
-    threads    = (Tx, Ty)
-    blocks     = (Bx, By)
-    CUDA.@sync gpukernel(cellpnum, cnt; threads = threads, blocks = blocks)
-    CUDA.@allowscalar cnt[1]
-end
 #####################################################################
-
-function kernel_neib_internal_2d!(pairs, cnt, cellpnum, points, celllist, dist) 
-    indexᵢ = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
-    indexⱼ = (blockIdx().y - Int32(1)) * blockDim().y + threadIdx().y
-    #indexₖ = (blockIdx().z - Int32(1)) * blockDim().z + threadIdx().z
-    Nx, Ny = size(cellpnum)
-    if indexᵢ <= Nx && indexⱼ <= Ny && cellpnum[indexᵢ, indexⱼ] > 1 
-        len = cellpnum[indexᵢ, indexⱼ]
-        for i = 1:len - 1
-            indi = celllist[i, indexᵢ, indexⱼ]
-            for j = i + 1:len
-                indj = celllist[j, indexᵢ, indexⱼ]
-                distance = sqrt((points[indi][1] - points[indj][1])^2 + (points[indi][2] - points[indj][2])^2)
-                if distance < dist
-                    n = CUDA.@atomic cnt[1] += 1
-                    n += 1 
-                    if n <= length(pairs)
-                        pairs[n] = tuple(indi, indj, distance)
-                    end
-                end
-            end
-        end
-    end
-    return nothing
-end
 """
     neib_internal_2d!(pairs, cnt, cellpnum, points, celllist, dist)
 
 Find all pairs with distance < h in one cell.
 """
 function neib_internal_2d!(pairs, cnt, cellpnum, points, celllist, dist)
+    dist² = dist^2
     CLn, CLx, CLy = size(celllist)
     Nx, Ny = size(cellpnum)
     if (Nx, Ny) != (CLx, CLy) error("cell list dimension ($((CLx, CLy))) not equal cellpnum $(size(cellpnum))...") end
-    gpukernel = @cuda launch=false kernel_neib_internal_2d!(pairs, cnt, cellpnum, points, celllist, dist)
+    gpukernel = @cuda launch=false kernel_neib_internal_2d!(pairs, cnt, cellpnum, points, celllist, dist², 6)
     config = launch_configuration(gpukernel.fun)
     maxThreads = config.threads
     Tx  = min(maxThreads, Nx)
@@ -169,53 +140,116 @@ function neib_internal_2d!(pairs, cnt, cellpnum, points, celllist, dist)
     Bx, By = cld(Nx, Tx), cld(Ny, Ty)  # Blocks in grid.
     threads = (Tx, Ty)
     blocks  = Bx, By
-    CUDA.@sync gpukernel(pairs, cnt, cellpnum, points, celllist, dist; threads = threads, blocks = blocks)
+    cs = fld(attribute(device(), CUDA.DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN),  Tx * Ty * sizeof(Tuple{Int32, Int32}))
+    CUDA.@sync gpukernel(pairs, cnt, cellpnum, points, celllist, dist², cs; threads = threads, blocks = blocks, shmem= Tx * Ty * cs * sizeof(Tuple{Int32, Int32}))
 end
-#####################################################################
-
-function kernel_neib_external_2d!(pairs, cnt, cellpnum, points, celllist,  offset, dist)
+function kernel_neib_internal_2d!(pairs, cnt, cellpnum, points, celllist, dist², cs) 
     indexᵢ = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
-    indexⱼ = (blockIdx().y - Int32(1)) * blockDim().y + threadIdx().y 
+    indexⱼ = (blockIdx().y - Int32(1)) * blockDim().y + threadIdx().y
+    #indexₖ = (blockIdx().z - Int32(1)) * blockDim().z + threadIdx().z
     Nx, Ny = size(cellpnum)
-    neibcellᵢ = indexᵢ + offset[1]
-    neibcellⱼ = indexⱼ + offset[2]
-    if 0 < neibcellᵢ <= Nx &&  0 < neibcellⱼ <= Ny && indexᵢ <= Nx && indexⱼ <= Ny && cellpnum[indexᵢ, indexⱼ] > 0 #&& cellpnum[neibcellᵢ, neibcellⱼ] > 0
-        iinds = view(celllist, 1:cellpnum[indexᵢ, indexⱼ], indexᵢ, indexⱼ)
-        jinds = view(celllist, 1:cellpnum[neibcellᵢ, neibcellⱼ], neibcellᵢ, neibcellⱼ)
-        for i in iinds
-            for j in jinds
-                distance = sqrt((points[i][1] - points[j][1])^2 + (points[i][2] - points[j][2])^2)
-                if distance < dist
-                    n = CUDA.@atomic cnt[1] += 1
-                    n +=1
-                    if n <= length(pairs)
-                        pairs[n] = tuple(i, j, distance)
+    cache  = CuDynamicSharedArray(Tuple{Int32, Int32}, blockDim().x * blockDim().y * cs)
+    if indexᵢ <= Nx && indexⱼ <= Ny && cellpnum[indexᵢ, indexⱼ] > 1
+        lind  = indexᵢ + Ny * (indexⱼ - Int32(1))
+        ccnt  = zero(Int32)
+        len = cellpnum[indexᵢ, indexⱼ]
+        for i = 1:len - 1
+            indi = celllist[i, indexᵢ, indexⱼ]
+            pᵢ = points[indi]
+            for j = i + 1:len
+                indj = celllist[j, indexᵢ, indexⱼ]
+                pⱼ = points[indj]
+                distance = (pᵢ[1] - pⱼ[1])^2 + (pᵢ[2] - pⱼ[2])^2
+                if distance < dist²
+                    cache[lind + ccnt] = minmax(indi, indj)
+                    ccnt += 1
+                    if ccnt == cs
+                        ccnt = 0
+                        s  = CUDA.@atomic cnt[1] += cs
+                        if s + cs <=length(pairs)
+                            for cind in 1:cs
+                                pairs[s+cind] = cache[lind + cind - 1]
+                            end
+                        end
                     end
                 end
-            end  
+            end
+        end
+        if ccnt != 0
+            s = CUDA.@atomic cnt[1] += ccnt
+            if s + ccnt <=length(pairs)
+                for cind in 1:ccnt 
+                    pairs[s + cind] = cache[lind + cind - 1]
+                end
+            end
         end
     end
     return nothing
 end
-
+#####################################################################
 """
     neib_external_2d!(pairs, cnt, cellpnum, points, celllist, offset, dist)
 
 Find all pairs with another cell shifted on offset.
 """
 function neib_external_2d!(pairs, cnt, cellpnum, points, celllist, offset, dist)
+    dist² = dist^2
     CLn, CLx, CLy = size(celllist)
     Nx, Ny = size(cellpnum)
     if (Nx, Ny) != (CLx, CLy) error("cell list dimension $((CLx, CLy)) not equal cellpnum $(size(cellpnum))...") end
-    gpukernel = @cuda launch=false kernel_neib_external_2d!(pairs, cnt, cellpnum, points, celllist,  offset, dist)
+    gpukernel = @cuda launch=false kernel_neib_external_2d!(pairs, cnt, cellpnum, points, celllist,  offset, dist², 6)
     config = launch_configuration(gpukernel.fun)
     maxThreads = config.threads
-    Tx  = min(maxThreads, Nx)
+    Tx  = min(maxThreads, Nx) 
     Ty  = min(fld(maxThreads, Tx), Ny)
     Bx, By = cld(Nx, Tx), cld(Ny, Ty)  # Blocks in grid.
     threads = (Tx, Ty)
     blocks  = Bx, By
-    CUDA.@sync gpukernel(pairs, cnt, cellpnum, points, celllist, offset, dist; threads = threads, blocks = blocks)
+    cs = fld(attribute(device(), CUDA.DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN),  Tx * Ty * sizeof(Tuple{Int32, Int32}))
+    CUDA.@sync gpukernel(pairs, cnt, cellpnum, points, celllist, offset, dist², cs; threads = threads, blocks = blocks, shmem= Tx * Ty * cs * sizeof(Tuple{Int32, Int32}))
+end
+function kernel_neib_external_2d!(pairs, cnt, cellpnum, points, celllist,  offset, dist², cs)
+    indexᵢ = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
+    indexⱼ = (blockIdx().y - Int32(1)) * blockDim().y + threadIdx().y 
+    cache  = CuDynamicSharedArray(Tuple{Int32, Int32}, blockDim().x * blockDim().y * cs)
+    Nx, Ny = size(cellpnum)
+    neibcellᵢ = indexᵢ + offset[1]
+    neibcellⱼ = indexⱼ + offset[2]
+    if 0 < neibcellᵢ <= Nx &&  0 < neibcellⱼ <= Ny && indexᵢ <= Nx && indexⱼ <= Ny && cellpnum[indexᵢ, indexⱼ] > 0 #&& cellpnum[neibcellᵢ, neibcellⱼ] > 0
+        lind  = indexᵢ + Ny * (indexⱼ - Int32(1))
+        ccnt  = zero(Int32)
+        iinds = view(celllist, 1:cellpnum[indexᵢ, indexⱼ], indexᵢ, indexⱼ)
+        jinds = view(celllist, 1:cellpnum[neibcellᵢ, neibcellⱼ], neibcellᵢ, neibcellⱼ)
+        for i in iinds
+            pᵢ = points[i]
+            for j in jinds
+                pⱼ = points[j]
+                distance = (pᵢ[1] - pⱼ[1])^2 + (pᵢ[2] - pⱼ[2])^2
+                if distance < dist²
+                    cache[lind + ccnt] = minmax(i, j)
+                    ccnt += 1
+                    if ccnt == cs
+                        ccnt = 0
+                        s  = CUDA.@atomic cnt[1] += cs
+                        if s + cs <=length(pairs)
+                            for cind in 1:cs
+                                pairs[s+cind] = cache[lind + cind - 1]
+                            end
+                        end
+                    end
+                end
+            end  
+        end
+        if ccnt != 0
+            s = CUDA.@atomic cnt[1] += ccnt
+            if s + ccnt <=length(pairs)
+                for cind in 1:ccnt 
+                    pairs[s + cind] = cache[lind + cind - 1]
+                end
+            end
+        end
+    end
+    return nothing
 end
 #####################################################################
 # Make neighbor matrix (list)
@@ -322,8 +356,8 @@ function kernel_∑W_2d!(∑W, pairs, points, sphkernel, H⁻¹)
     index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
     if index <= length(pairs)
         pair  = pairs[index]
-        pᵢ    = pair[1]; pⱼ = pair[2]; d = pair[3]
-        if !isnan(d)
+        pᵢ    = pair[1]; pⱼ = pair[2]
+        if pᵢ != 0
             xᵢ    = points[pᵢ]
             xⱼ    = points[pⱼ]
             Δx    = (xᵢ[1] - xⱼ[1], xᵢ[2] - xⱼ[2])
@@ -391,8 +425,8 @@ function kernel_∑∇W_2d!(∑∇W, ∇W, pairs, points, kernel, H⁻¹)
     index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
     if index <= length(pairs)
         pair  = pairs[index]
-        pᵢ    = pair[1]; pⱼ = pair[2]; r = pair[3]
-        if !isnan(r)
+        pᵢ    = pair[1]; pⱼ = pair[2]
+        if pᵢ != 0
             xᵢ    = points[pᵢ]
             xⱼ    = points[pⱼ]
             Δx    = (xᵢ[1] - xⱼ[1], xᵢ[2] - xⱼ[2])
@@ -420,8 +454,8 @@ function kernel_∑∇W_2d!(∑∇W, pairs, points, kernel, H⁻¹)
     index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
     if index <= length(pairs)
         pair  = pairs[index]
-        pᵢ    = pair[1]; pⱼ = pair[2]; r = pair[3]
-        if !isnan(r)
+        pᵢ    = pair[1]; pⱼ = pair[2]
+        if pᵢ != 0
             xᵢ    = points[pᵢ]
             xⱼ    = points[pⱼ]
             Δx    = (xᵢ[1] - xⱼ[1], xᵢ[2] - xⱼ[2])
@@ -459,13 +493,41 @@ end
 
 
 #####################################################################
+"""
+    
+    ∂ρ∂tDDT!(∑∂ρ∂t,  ∇W, pairs, points, h, m₀, δᵩ, c₀, γ, g, ρ₀, ρ, v, ptype) 
 
-function kernel_∂ρ∂tDDT!(∑∂ρ∂t,  ∇Wₙ, pairs, points, h, m₀, δᵩ, c₀, γ, g, ρ₀, ρ, v, ptype) 
-    index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
-    if index <= length(pairs)
+Compute ∂ρ∂t - density derivative includind density diffusion.
+
+
+
+"""
+function ∂ρ∂tDDT!(∑∂ρ∂t,  ∇W, pairs, points, h, m₀, δᵩ, c₀, γ, g, ρ₀, ρ, v, ptype) 
+    if length(pairs) != length(∇W) error("Length shoul be equal") end
+
+    gpukernel = @cuda launch=false kernel_∂ρ∂tDDT!(∑∂ρ∂t,  ∇W, pairs, points, h, m₀, δᵩ, c₀, γ, g, ρ₀, ρ, v, ptype) 
+    config = launch_configuration(gpukernel.fun)
+    Nx = length(pairs)
+    maxThreads = config.threads
+    Tx  = min(maxThreads, Nx)
+    Bx  = cld(Nx, Tx)
+    CUDA.@sync gpukernel(∑∂ρ∂t, ∇W, pairs, points, h, m₀, δᵩ, c₀, γ, g, ρ₀, ρ, v, ptype; threads = Tx, blocks = Bx)
+end
+function kernel_∂ρ∂tDDT!(∑∂ρ∂t,  ∇W, pairs, points, h, m₀, δᵩ, c₀, γ, g, ρ₀, ρ, v, ptype) 
+    tindex = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
+    stride = gridDim().x * blockDim().x
+    index      = tindex
+    # move it outside kernel
+    γ⁻¹  = 1/γ
+    η²   = (0.1*h)*(0.1*h)
+    Cb    = (c₀ * c₀ * ρ₀) * γ⁻¹
+    DDTgz = ρ₀ * g / Cb
+    DDTkh = 2 * h * δᵩ
+
+    while index <= length(pairs)
         pair  = pairs[index]
-        pᵢ    = pair[1]; pⱼ = pair[2]; d = pair[3]
-        if !isnan(d) # && !(isboundary[pᵢ] && isboundary[pᵢ]) 
+        pᵢ    = pair[1]; pⱼ = pair[2]
+        if pᵢ > 0 # && !(isboundary[pᵢ] && isboundary[pᵢ]) 
             xᵢ    = points[pᵢ]
             xⱼ    = points[pⱼ]
             Δx    = (xᵢ[1] - xⱼ[1], xᵢ[2] - xⱼ[2])
@@ -473,13 +535,6 @@ function kernel_∂ρ∂tDDT!(∑∂ρ∂t,  ∇Wₙ, pairs, points, h, m₀, δ
             # for timestep Δt½ d != actual range
             # one way - not calculate values out of 2h
             # if r² > (2h)^2 return nothing end
-
-            # move it outside kernel
-            γ⁻¹  = 1/γ
-            η²   = (0.1*h)*(0.1*h)
-            Cb    = (c₀ * c₀ * ρ₀) * γ⁻¹
-            DDTgz = ρ₀ * g / Cb
-            DDTkh = 2 * h * δᵩ
             #=
             Cb = (c₀ * c₀ * ρ₀) * γ⁻¹
             Pᴴ =  ρ₀ * g * z
@@ -490,7 +545,7 @@ function kernel_∂ρ∂tDDT!(∑∂ρ∂t,  ∇Wₙ, pairs, points, h, m₀, δ
 
             Δv    = (v[pᵢ][1] - v[pⱼ][1], v[pᵢ][2] - v[pⱼ][2])
 
-            ∇W   = ∇Wₙ[index]
+            ∇Wᵢⱼ  = ∇W[index]
             #=
             z  = Δx[2]
             Cb = (c₀ * c₀ * ρ₀) * γ⁻¹
@@ -498,12 +553,12 @@ function kernel_∂ρ∂tDDT!(∑∂ρ∂t,  ∇Wₙ, pairs, points, h, m₀, δ
             ρᴴ =  ρ₀ * (((Pᴴ + 1)/Cb)^γ⁻¹ - 1)
             ψ  = 2 * (ρᵢ - ρⱼ) * Δx / r²
             =#
-            dot3  = -(Δx[1] * ∇W[1] + Δx[2] * ∇W[2]) #  - Δx ⋅ ∇W
+            dot3  = -(Δx[1] * ∇Wᵢⱼ[1] + Δx[2] * ∇Wᵢⱼ[2]) #  - Δx ⋅ ∇Wᵢⱼ
 
             # as actual range at timestep Δt½  may be greateg  - some problems can be here
             if 1 + DDTgz * Δx[2] < 0 || 1 - DDTgz * Δx[2] < 0 return nothing end
             
-            m₀dot     = m₀ * (Δv[1] * ∇W[1] + Δv[2] * ∇W[2])  #  Δv ⋅ ∇W
+            m₀dot     = m₀ * (Δv[1] * ∇Wᵢⱼ[1] + Δv[2] * ∇Wᵢⱼ[2])  #  Δv ⋅ ∇Wᵢⱼ
             ∑∂ρ∂ti = ∑∂ρ∂tj = m₀dot
 
             if ptype[pᵢ] >= 1
@@ -539,38 +594,36 @@ function kernel_∂ρ∂tDDT!(∑∂ρ∂t,  ∇Wₙ, pairs, points, h, m₀, δ
                 error() 
             end
             =#
+            
         end
+        index += stride
     end
     return nothing
 end
+#####################################################################
 """
     
-    ∂ρ∂tDDT!(∑∂ρ∂t,  ∇W, pairs, points, h, m₀, δᵩ, c₀, γ, g, ρ₀, ρ, v, ptype) 
-
-Compute ∂ρ∂t - density derivative includind density diffusion.
+    ∂Π∂t!(∑∂Π∂t, ∇W, pairs, points, h, ρ, α, v, c₀, m₀)
 
 
-
+Compute ∂Π∂t - artificial viscosity.
 """
-function ∂ρ∂tDDT!(∑∂ρ∂t,  ∇W, pairs, points, h, m₀, δᵩ, c₀, γ, g, ρ₀, ρ, v, ptype) 
-    if length(pairs) != length(∇W) error("Length shoul be equal") end
-
-    gpukernel = @cuda launch=false kernel_∂ρ∂tDDT!(∑∂ρ∂t,  ∇W, pairs, points, h, m₀, δᵩ, c₀, γ, g, ρ₀, ρ, v, ptype) 
+function ∂Π∂t!(∑∂Π∂t, ∇W, pairs, points, h, ρ, α, v, c₀, m₀) 
+    gpukernel = @cuda launch=false kernel_∂Π∂t!(∑∂Π∂t, ∇W, pairs, points, h, ρ, α, v, c₀, m₀) 
     config = launch_configuration(gpukernel.fun)
     Nx = length(pairs)
     maxThreads = config.threads
     Tx  = min(maxThreads, Nx)
     Bx = cld(Nx, Tx)
-    CUDA.@sync gpukernel(∑∂ρ∂t, ∇W, pairs, points, h, m₀, δᵩ, c₀, γ, g, ρ₀, ρ, v, ptype; threads = Tx, blocks = Bx)
+    CUDA.@sync gpukernel(∑∂Π∂t, ∇W, pairs, points, h, ρ, α, v, c₀, m₀; threads = Tx, blocks = Bx)
 end
-#####################################################################
 function kernel_∂Π∂t!(∑∂Π∂t, ∇Wₙ, pairs, points, h, ρ, α, v, c₀, m₀) 
     index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
 
     if index <= length(pairs)
         pair  = pairs[index]
-        pᵢ    = pair[1]; pⱼ = pair[2]; d = pair[3]
-        if !isnan(d)
+        pᵢ    = pair[1]; pⱼ = pair[2]
+        if pᵢ != 0
 
             xᵢ    = points[pᵢ]
             xⱼ    = points[pⱼ]
@@ -617,25 +670,7 @@ function kernel_∂Π∂t!(∑∂Π∂t, ∇Wₙ, pairs, points, h, ρ, α, v, c
     end
     return nothing
 end
-"""
-    
-    ∂Π∂t!(∑∂Π∂t, ∇Wₙ, pairs, points, h, ρ, α, v, c₀, m₀)
-
-
-Compute ∂Π∂t - artificial viscosity.
-"""
-function ∂Π∂t!(∑∂Π∂t, ∇W, pairs, points, h, ρ, α, v, c₀, m₀) 
-    gpukernel = @cuda launch=false kernel_∂Π∂t!(∑∂Π∂t, ∇W, pairs, points, h, ρ, α, v, c₀, m₀) 
-    config = launch_configuration(gpukernel.fun)
-    Nx = length(pairs)
-    maxThreads = config.threads
-    Tx  = min(maxThreads, Nx)
-    Bx = cld(Nx, Tx)
-    CUDA.@sync gpukernel(∑∂Π∂t, ∇W, pairs, points, h, ρ, α, v, c₀, m₀; threads = Tx, blocks = Bx)
-end
 #####################################################################
-
-
 """
     pressure(ρ, c₀, γ, ρ₀)
 
@@ -659,13 +694,6 @@ function pressure(ρ, γ, ρ₀, P₀, ptype)
 end
 
 #####################################################################
-function kernel_pressure!(P, ρ, γ, ρ₀, P₀, ptype) 
-    index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
-    if index <= length(ρ)
-        P[index] = pressure(ρ[index], γ, ρ₀, P₀, ptype[index])
-    end
-    return nothing
-end
 """
     
     pressure!(P, ρ, ρ₀, c₀, γ) 
@@ -686,16 +714,35 @@ function pressure!(P, ρ, c₀, γ, ρ₀, ptype)
     Bx = cld(Nx, Tx)
     CUDA.@sync gpukernel(P, ρ, γ, ρ₀, P₀, ptype; threads = Tx, blocks = Bx)
 end
-
-
-
+function kernel_pressure!(P, ρ, γ, ρ₀, P₀, ptype) 
+    index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
+    if index <= length(ρ)
+        P[index] = pressure(ρ[index], γ, ρ₀, P₀, ptype[index])
+    end
+    return nothing
+end
 #####################################################################
+"""
+    
+    ∂v∂t!(∑∂v∂t,  ∇Wₙ, pairs, m, ρ, c₀, γ, ρ₀) 
+
+The momentum equation (without dissipation).
+"""
+function ∂v∂t!(∑∂v∂t,  ∇W, P, pairs, m, ρ) 
+    gpukernel = @cuda launch=false kernel_∂v∂t!(∑∂v∂t,  ∇W, P, pairs, m, ρ) 
+    config = launch_configuration(gpukernel.fun)
+    Nx = length(pairs)
+    maxThreads = config.threads
+    Tx  = min(maxThreads, Nx)
+    Bx = cld(Nx, Tx)
+    CUDA.@sync gpukernel(∑∂v∂t,  ∇W, P, pairs, m, ρ; threads = Tx, blocks = Bx)
+end
 function kernel_∂v∂t!(∑∂v∂t, ∇Wₙ, P, pairs, m, ρ) 
     index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
     if index <= length(pairs)
         pair  = pairs[index]
-        pᵢ    = pair[1]; pⱼ = pair[2]; d = pair[3]
-        if !isnan(d)
+        pᵢ    = pair[1]; pⱼ = pair[2]
+        if pᵢ != 0
 
             ρᵢ    = ρ[pᵢ]
             ρⱼ    = ρ[pⱼ]
@@ -733,39 +780,8 @@ function kernel_∂v∂t!(∑∂v∂t, ∇Wₙ, P, pairs, m, ρ)
     end
     return nothing
 end
-"""
-    
-    ∂v∂t!(∑∂v∂t,  ∇Wₙ, pairs, m, ρ, c₀, γ, ρ₀) 
-
-The momentum equation (without dissipation).
-"""
-function ∂v∂t!(∑∂v∂t,  ∇W, P, pairs, m, ρ) 
-    gpukernel = @cuda launch=false kernel_∂v∂t!(∑∂v∂t,  ∇W, P, pairs, m, ρ) 
-    config = launch_configuration(gpukernel.fun)
-    Nx = length(pairs)
-    maxThreads = config.threads
-    Tx  = min(maxThreads, Nx)
-    Bx = cld(Nx, Tx)
-    CUDA.@sync gpukernel(∑∂v∂t,  ∇W, P, pairs, m, ρ; threads = Tx, blocks = Bx)
-end
-
 #####################################################################
 
-function kernel_completed_∂v∂t!(∑∂v∂t, ∑∂Π∂t,  gvec) 
-    index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
-    if index <= length(∑∂v∂t[1])
-        #∑∂v∂t[index, 1] +=  ∑∂Π∂t[index, 1] - gvec[1] #* gfac[index]
-        #∑∂v∂t[index, 2] +=  ∑∂Π∂t[index, 2] - gvec[2] #* gfac[index]
-        ∑∂v∂tˣ = ∑∂v∂t[1]
-        ∑∂v∂tʸ = ∑∂v∂t[2]
-        ∑∂Π∂tˣ = ∑∂Π∂t[1]
-        ∑∂Π∂tʸ = ∑∂Π∂t[2] 
-        ∑∂v∂tˣ[index] +=  ∑∂Π∂tˣ[index] - gvec[1] #* gfac[index]
-        ∑∂v∂tʸ[index] +=  ∑∂Π∂tʸ[index] - gvec[2] #* gfac[index]
-        
-    end
-    return nothing
-end
 """
     
     completed_∂vᵢ∂t!(∑∂v∂t, ∑∂Π∂t,  gvec, gfac)  
@@ -782,23 +798,22 @@ function completed_∂v∂t!(∑∂v∂t, ∑∂Π∂t,  gvec)
     Bx = cld(Nx, Tx)
     CUDA.@sync gpukernel(∑∂v∂t, ∑∂Π∂t,  gvec; threads = Tx, blocks = Bx)
 end
-#####################################################################
-
-function kernel_update_ρ!(ρ, ∑∂ρ∂t, Δt, ρ₀, ptype) 
+function kernel_completed_∂v∂t!(∑∂v∂t, ∑∂Π∂t,  gvec) 
     index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
-    if index <= length(ρ)
-        ρval = ρ[index] + ∑∂ρ∂t[index] * Δt
-        if ρval < ρ₀ && ptype[index] < 1 ρval = ρ₀ end
-        #=
-        if isnan(ρval) || iszero(ρval) || ρval < 0.001
-            @cuprintln "kernel update rho: index =  $index, rhoval = $ρval, rhoi = $(ρ[index]), dpdt = $(∑∂ρ∂t[index]), dt = $Δt, isboundary = $(isboundary[index])"
-            error() 
-        end
-        =#
-        ρ[index] = ρval
+    if index <= length(∑∂v∂t[1])
+        #∑∂v∂t[index, 1] +=  ∑∂Π∂t[index, 1] - gvec[1] #* gfac[index]
+        #∑∂v∂t[index, 2] +=  ∑∂Π∂t[index, 2] - gvec[2] #* gfac[index]
+        ∑∂v∂tˣ = ∑∂v∂t[1]
+        ∑∂v∂tʸ = ∑∂v∂t[2]
+        ∑∂Π∂tˣ = ∑∂Π∂t[1]
+        ∑∂Π∂tʸ = ∑∂Π∂t[2] 
+        ∑∂v∂tˣ[index] +=  ∑∂Π∂tˣ[index] - gvec[1] #* gfac[index]
+        ∑∂v∂tʸ[index] +=  ∑∂Π∂tʸ[index] - gvec[2] #* gfac[index]
+        
     end
     return nothing
 end
+#####################################################################
 """
     update_ρ!(ρ, ∑∂ρ∂t, Δt, ρ₀, isboundary) 
 
@@ -814,7 +829,37 @@ function update_ρ!(ρ, ∑∂ρ∂t, Δt, ρ₀, ptype)
     Bx = cld(Nx, Tx)
     CUDA.@sync gpukernel(ρ, ∑∂ρ∂t, Δt, ρ₀, ptype; threads = Tx, blocks = Bx)
 end
+function kernel_update_ρ!(ρ, ∑∂ρ∂t, Δt, ρ₀, ptype) 
+    index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
+    if index <= length(ρ)
+        ρval = ρ[index] + ∑∂ρ∂t[index] * Δt
+        if ρval < ρ₀ && ptype[index] < 1 ρval = ρ₀ end
+        #=
+        if isnan(ρval) || iszero(ρval) || ρval < 0.001
+            @cuprintln "kernel update rho: index =  $index, rhoval = $ρval, rhoi = $(ρ[index]), dpdt = $(∑∂ρ∂t[index]), dt = $Δt, isboundary = $(isboundary[index])"
+            error() 
+        end
+        =#
+        ρ[index] = ρval
+    end
+    return nothing
+end
 #####################################################################
+"""
+    update_vp∂v∂tΔt!(v, ∑∂v∂t, Δt, ml) 
+
+
+"""
+function update_vp∂v∂tΔt!(v, ∑∂v∂t, Δt, ptype) 
+    if !(length(v) == length(∑∂v∂t[1]) == length(ptype)) error("Wrong length") end
+    gpukernel = @cuda launch = false kernel_update_vp∂v∂tΔt!(v, ∑∂v∂t, Δt, ptype) 
+    config = launch_configuration(gpukernel.fun)
+    Nx = length(v)
+    maxThreads = config.threads
+    Tx  = min(maxThreads, Nx)
+    Bx  = cld(Nx, Tx)
+    CUDA.@sync gpukernel(v, ∑∂v∂t, Δt, ptype; threads = Tx, blocks = Bx)
+end
 function kernel_update_vp∂v∂tΔt!(v, ∑∂v∂t, Δt, ptype) 
     index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
     if index <= length(v) && ptype[index] >= 1
@@ -833,38 +878,7 @@ function kernel_update_vp∂v∂tΔt!(v, ∑∂v∂t, Δt, ptype)
     end
     return nothing
 end
-"""
-    update_vp∂v∂tΔt!(v, ∑∂v∂t, Δt, ml) 
-
-
-"""
-function update_vp∂v∂tΔt!(v, ∑∂v∂t, Δt, ptype) 
-    if !(length(v) == length(∑∂v∂t[1]) == length(ptype)) error("Wrong length") end
-    gpukernel = @cuda launch = false kernel_update_vp∂v∂tΔt!(v, ∑∂v∂t, Δt, ptype) 
-    config = launch_configuration(gpukernel.fun)
-    Nx = length(v)
-    maxThreads = config.threads
-    Tx  = min(maxThreads, Nx)
-    Bx  = cld(Nx, Tx)
-    CUDA.@sync gpukernel(v, ∑∂v∂t, Δt, ptype; threads = Tx, blocks = Bx)
-end
-
 #####################################################################
-function kernel_update_xpvΔt!(x, v, Δt) 
-    index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
-    if index <= length(x)
-        xval = x[index]
-        vval = v[index]
-        x[index] = (xval[1] + vval[1] * Δt, xval[2] + vval[2] * Δt)
-        #=
-        if isnan(x[index][1] )
-            @cuprintln "kernel dxdt: xval =  $(xval[1]) , vval =  $(vval[1]),  dt = $Δt"
-            error() 
-        end
-        =#
-    end
-    return nothing
-end
 """
     update_xpvΔt!(x, v, Δt, ml) 
 
@@ -880,8 +894,38 @@ function update_xpvΔt!(x, v, Δt)
     Bx = cld(Nx, Tx)
     CUDA.@sync gpukernel(x, v, Δt; threads = Tx, blocks = Bx)
 end
+function kernel_update_xpvΔt!(x, v, Δt) 
+    index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
+    if index <= length(x)
+        xval = x[index]
+        vval = v[index]
+        x[index] = (xval[1] + vval[1] * Δt, xval[2] + vval[2] * Δt)
+        #=
+        if isnan(x[index][1] )
+            @cuprintln "kernel dxdt: xval =  $(xval[1]) , vval =  $(vval[1]),  dt = $Δt"
+            error() 
+        end
+        =#
+    end
+    return nothing
+end
 #####################################################################
+"""
+    
+    update_all!(ρ, ρΔt½, v, vΔt½, x, xΔt½, ∑∂ρ∂t, ∑∂v∂t,  Δt, ρ₀, isboundary, ml) 
 
+
+"""
+function update_all!(ρ, ρΔt½, v, vΔt½, x, xΔt½, ∑∂ρ∂t, ∑∂v∂t, Δt, cΔx, ρ₀, ptype) 
+    if length(x) != length(v) error("Wrong length") end
+    gpukernel = @cuda launch=false kernel_update_all!(ρ, ρΔt½, v, vΔt½, x, xΔt½, ∑∂ρ∂t, ∑∂v∂t,  Δt, cΔx, ρ₀, ptype) 
+    config = launch_configuration(gpukernel.fun)
+    Nx = length(x)
+    maxThreads = config.threads
+    Tx  = min(maxThreads, Nx)
+    Bx = cld(Nx, Tx)
+    CUDA.@sync gpukernel(ρ, ρΔt½, v, vΔt½, x, xΔt½, ∑∂ρ∂t, ∑∂v∂t, Δt, cΔx, ρ₀, ptype; threads = Tx, blocks = Bx)
+end
 function kernel_update_all!(ρ, ρΔt½, v, vΔt½, x, xΔt½, ∑∂ρ∂t, ∑∂v∂t, Δt, cΔx, ρ₀, ptype) # << rename
     index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
     if index <= length(x)
@@ -926,41 +970,7 @@ function kernel_update_all!(ρ, ρΔt½, v, vΔt½, x, xΔt½, ∑∂ρ∂t, ∑
     end
     return nothing
 end
-"""
-    
-    update_all!(ρ, ρΔt½, v, vΔt½, x, xΔt½, ∑∂ρ∂t, ∑∂v∂t,  Δt, ρ₀, isboundary, ml) 
-
-
-"""
-function update_all!(ρ, ρΔt½, v, vΔt½, x, xΔt½, ∑∂ρ∂t, ∑∂v∂t, Δt, cΔx, ρ₀, ptype) 
-    if length(x) != length(v) error("Wrong length") end
-    gpukernel = @cuda launch=false kernel_update_all!(ρ, ρΔt½, v, vΔt½, x, xΔt½, ∑∂ρ∂t, ∑∂v∂t,  Δt, cΔx, ρ₀, ptype) 
-    config = launch_configuration(gpukernel.fun)
-    Nx = length(x)
-    maxThreads = config.threads
-    Tx  = min(maxThreads, Nx)
-    Bx = cld(Nx, Tx)
-    CUDA.@sync gpukernel(ρ, ρΔt½, v, vΔt½, x, xΔt½, ∑∂ρ∂t, ∑∂v∂t, Δt, cΔx, ρ₀, ptype; threads = Tx, blocks = Bx)
-end
-
 #####################################################################
-
-function kernel_Δt_stepping!(buf, v, points, h, η²) 
-    index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
-    if index <= length(buf)
-        vp = v[index]
-        pp = points[index]
-        buf[index] = abs(h * (vp[1] * pp[1] + vp[2] * pp[2]) / (pp[1]^2 + pp[2]^2 + η²))
-    end
-    return nothing
-end
-function kernel_Δt_stepping_norm!(buf, a) 
-    index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
-    if index <= length(buf)
-        buf[index] =  sqrt(a[1][index]^2 + a[2][index]^2) 
-    end
-    return nothing
-end
 """    
     Δt_stepping(buf, a, v, points, c₀, h, CFL, timelims) 
 
@@ -997,15 +1007,47 @@ function Δt_stepping(buf, a, v, points, c₀, h, CFL, timelims)
     dt    = min(max(dt, timelims[1]), timelims[2])
     return dt
 end
+function kernel_Δt_stepping!(buf, v, points, h, η²) 
+    index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
+    if index <= length(buf)
+        vp = v[index]
+        pp = points[index]
+        buf[index] = abs(h * (vp[1] * pp[1] + vp[2] * pp[2]) / (pp[1]^2 + pp[2]^2 + η²))
+    end
+    return nothing
+end
+function kernel_Δt_stepping_norm!(buf, a) 
+    index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
+    if index <= length(buf)
+        buf[index] =  sqrt(a[1][index]^2 + a[2][index]^2) 
+    end
+    return nothing
+end
+#####################################################################
+#####################################################################
+"""
+    
+    ∂v∂tpF!(∑∂v∂t, pairs, points, s, H) 
 
-#####################################################################
-#####################################################################
+Add surface tension to ∑∂v∂t. Modified.
+
+A. Tartakovsky and P. Meakin, Phys. Rev. E 72 (2005)
+"""
+function ∂v∂tpF!(∑∂v∂t, pairs, points, s, h, m₀, ptype) 
+    gpukernel = @cuda launch=false kernel_∂v∂tpF!(∑∂v∂t, pairs, points, s, h, m₀, ptype) 
+    config = launch_configuration(gpukernel.fun)
+    Nx = length(pairs)
+    maxThreads = config.threads
+    Tx  = min(maxThreads, Nx)
+    Bx = cld(Nx, Tx)
+    CUDA.@sync gpukernel(∑∂v∂t, pairs, points, s, h, m₀, ptype; threads = Tx, blocks = Bx)
+end
 function kernel_∂v∂tpF!(∑∂v∂t, pairs, points, s, h, m₀, ptype) 
     index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
     if index <= length(pairs)
         pair  = pairs[index]
-        pᵢ    = pair[1]; pⱼ = pair[2]; d = pair[3]
-        if !isnan(d)
+        pᵢ    = pair[1]; pⱼ = pair[2]
+        if pᵢ != 0
             if ptype[pᵢ] >= 1 && ptype[pⱼ] >= 1
                 xᵢ    = points[pᵢ]
                 xⱼ    = points[pⱼ]
@@ -1025,24 +1067,6 @@ function kernel_∂v∂tpF!(∑∂v∂t, pairs, points, s, h, m₀, ptype)
     end
     return nothing
 end
-"""
-    
-    ∂v∂tpF!(∑∂v∂t, pairs, points, s, H) 
-
-Add surface tension to ∑∂v∂t. Modified.
-
-A. Tartakovsky and P. Meakin, Phys. Rev. E 72 (2005)
-"""
-function ∂v∂tpF!(∑∂v∂t, pairs, points, s, h, m₀, ptype) 
-    gpukernel = @cuda launch=false kernel_∂v∂tpF!(∑∂v∂t, pairs, points, s, h, m₀, ptype) 
-    config = launch_configuration(gpukernel.fun)
-    Nx = length(pairs)
-    maxThreads = config.threads
-    Tx  = min(maxThreads, Nx)
-    Bx = cld(Nx, Tx)
-    CUDA.@sync gpukernel(∑∂v∂t, pairs, points, s, h, m₀, ptype; threads = Tx, blocks = Bx)
-end
-
 ###################################################################################
 # Dynamic Particle Collision (DPC) 
 # https://arxiv.org/pdf/2110.10076.pdf
@@ -1050,58 +1074,6 @@ end
 # ticle regularization techniques
 # Mojtaba Jandaghian, Herman Musumari Siaben, Ahmad Shakibaeinia
 ###################################################################################
-
-function kernel_dpcreg!(∑Δvdpc, v, ρ, P, pairs, points, sphkernel, wh⁻¹, l₀, l₀⁻¹, Pmin, Pmax, Δt, λ, dpckernlim) 
-    index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
-
-    if index <= length(pairs)
-        pair  = pairs[index]
-        pᵢ    = pair[1]; pⱼ = pair[2]; d = pair[3]
-        if !isnan(d)
-            η²    = (0.1 * l₀) * (0.1 * l₀)
-            xᵢ    = points[pᵢ]
-            xⱼ    = points[pⱼ]
-            ρᵢ    = ρ[pᵢ]
-            ρⱼ    = ρ[pⱼ]
-
-            Δx    = (xᵢ[1] - xⱼ[1], xᵢ[2] - xⱼ[2])
-            Δv    = (v[pᵢ][1] - v[pⱼ][1], v[pᵢ][2] - v[pⱼ][2])
-            r²    = Δx[1]^2 + Δx[2]^2 
-            r     = sqrt(r²) 
-            u     = r * l₀⁻¹
-            w     = 𝒲(sphkernel, u, l₀⁻¹)
-
-            χ     = sqrt(w * wh⁻¹)
-
-            k     = ifelse(u < dpckernlim, 1.0, χ)
-
-            Pᵇ    = χ * max(min(λ * abs(P[pᵢ] + P[pⱼ]), λ * Pmax), Pmin)
-
-            vr   = Δv[1] * Δx[1] +  Δv[2] * Δx[2] 
-
-            if vr < 0
-                # Δvdpc = ∑ k * 2mⱼ / (mᵢ + mⱼ) * vᶜ   | mⱼ = mᵢ |  => Δvdpc = ∑ k * vᶜ
-                vrdr    = vr / (r² + η²)
-                vᶜ      = (-vrdr * Δx[1],  -vrdr * Δx[2])
-                Δvdpc   = (k * vᶜ[1],  k * vᶜ[2])
-            else
-                # Δvdpc = Δt / ρᵢ * ∑ 2Vᵢ / (Vᵢ + Vⱼ) * Pᵇ / (r² + η²) * Δx
-                # V = m / ρ
-                # Δvdpc = Δt * ∑ 2 / (ρᵢ + ρⱼ) * Pᵇ / (r² + η²) * Δx
-                tvar = 2Δt* Pᵇ / ((ρᵢ + ρⱼ) * (r² + η²))
-                Δvdpc = (tvar * Δx[1], tvar * Δx[2])
-            end
-            
-            ∑Δvdpcˣ = ∑Δvdpc[1]
-            ∑Δvdpcʸ = ∑Δvdpc[2]   
-            CUDA.@atomic ∑Δvdpcˣ[pᵢ] +=  Δvdpc[1]
-            CUDA.@atomic ∑Δvdpcʸ[pᵢ] +=  Δvdpc[2]
-            CUDA.@atomic ∑Δvdpcˣ[pⱼ] -=  Δvdpc[1]
-            CUDA.@atomic ∑Δvdpcʸ[pⱼ] -=  Δvdpc[2]
-        end
-    end
-    return nothing
-end
 """
     
     dpcreg!(∑Δvdpc, v, ρ, P, pairs, points, sphkernel, l₀, Pmin, Pmax, Δt, λ, dpckernlim) 
@@ -1147,21 +1119,58 @@ function dpcreg!(∑Δvdpc, v, ρ, P, pairs, points, sphkernel, l₀, Pmin, Pmax
     Bx = cld(Nx, Tx)
     CUDA.@sync gpukernel(∑Δvdpc, v, ρ, P, pairs, points, sphkernel, wh⁻¹, l₀, l₀⁻¹, Pmin, Pmax, Δt, λ, dpckernlim; threads = Tx, blocks = Bx)
 end
-
-function kernel_update_dpcreg!(v, x, ∑Δvdpc, Δt, ptype) 
+function kernel_dpcreg!(∑Δvdpc, v, ρ, P, pairs, points, sphkernel, wh⁻¹, l₀, l₀⁻¹, Pmin, Pmax, Δt, λ, dpckernlim) 
     index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
-    if index <= length(x)
-        if ptype[index] >= 1
-            xval = x[index]
-            vval = v[index]
-            dpcval = (∑Δvdpc[1][index], ∑Δvdpc[2][index])
 
-            v[index] = (vval[1] + dpcval[1], vval[2] + dpcval[2])
-            x[index] = (xval[1] + dpcval[1] * Δt, xval[2] + dpcval[2] * Δt)
+    if index <= length(pairs)
+        pair  = pairs[index]
+        pᵢ    = pair[1]; pⱼ = pair[2]
+        if pᵢ != 0
+            η²    = (0.1 * l₀) * (0.1 * l₀)
+            xᵢ    = points[pᵢ]
+            xⱼ    = points[pⱼ]
+            ρᵢ    = ρ[pᵢ]
+            ρⱼ    = ρ[pⱼ]
+
+            Δx    = (xᵢ[1] - xⱼ[1], xᵢ[2] - xⱼ[2])
+            Δv    = (v[pᵢ][1] - v[pⱼ][1], v[pᵢ][2] - v[pⱼ][2])
+            r²    = Δx[1]^2 + Δx[2]^2 
+            r     = sqrt(r²) 
+            u     = r * l₀⁻¹
+            w     = 𝒲(sphkernel, u, l₀⁻¹)
+
+            χ     = sqrt(w * wh⁻¹)
+
+            k     = ifelse(u < dpckernlim, 1.0, χ)
+
+            Pᵇ    = χ * max(min(λ * abs(P[pᵢ] + P[pⱼ]), λ * Pmax), Pmin)
+
+            vr   = Δv[1] * Δx[1] +  Δv[2] * Δx[2] 
+
+            if vr < 0
+                # Δvdpc = ∑ k * 2mⱼ / (mᵢ + mⱼ) * vᶜ   | mⱼ = mᵢ |  => Δvdpc = ∑ k * vᶜ
+                vrdr    = vr / (r² + η²)
+                vᶜ      = (-vrdr * Δx[1],  -vrdr * Δx[2])
+                Δvdpc   = (k * vᶜ[1],  k * vᶜ[2])
+            else
+                # Δvdpc = Δt / ρᵢ * ∑ 2Vᵢ / (Vᵢ + Vⱼ) * Pᵇ / (r² + η²) * Δx
+                # V = m / ρ
+                # Δvdpc = Δt * ∑ 2 / (ρᵢ + ρⱼ) * Pᵇ / (r² + η²) * Δx
+                tvar = 2Δt* Pᵇ / ((ρᵢ + ρⱼ) * (r² + η²))
+                Δvdpc = (tvar * Δx[1], tvar * Δx[2])
+            end
+            
+            ∑Δvdpcˣ = ∑Δvdpc[1]
+            ∑Δvdpcʸ = ∑Δvdpc[2]   
+            CUDA.@atomic ∑Δvdpcˣ[pᵢ] +=  Δvdpc[1]
+            CUDA.@atomic ∑Δvdpcʸ[pᵢ] +=  Δvdpc[2]
+            CUDA.@atomic ∑Δvdpcˣ[pⱼ] -=  Δvdpc[1]
+            CUDA.@atomic ∑Δvdpcʸ[pⱼ] -=  Δvdpc[2]
         end
     end
     return nothing
 end
+
 """
     update_dpcreg!(v, x, ∑Δvdpc, Δt, isboundary) 
 
@@ -1177,6 +1186,20 @@ function update_dpcreg!(v, x, ∑Δvdpc, Δt, ptype)
     Bx = cld(Nx, Tx)
     CUDA.@sync gpukernel(v, x, ∑Δvdpc, Δt, ptype; threads = Tx, blocks = Bx)
 end
+function kernel_update_dpcreg!(v, x, ∑Δvdpc, Δt, ptype) 
+    index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
+    if index <= length(x)
+        if ptype[index] >= 1
+            xval = x[index]
+            vval = v[index]
+            dpcval = (∑Δvdpc[1][index], ∑Δvdpc[2][index])
+
+            v[index] = (vval[1] + dpcval[1], vval[2] + dpcval[2])
+            x[index] = (xval[1] + dpcval[1] * Δt, xval[2] + dpcval[2] * Δt)
+        end
+    end
+    return nothing
+end
 ###################################################################################
 # Corrected Smoothed Particle Method (CSPM)
 # Chen, J. K., Beraun, J. E., & Carney, T. C. (1999). 
@@ -1186,13 +1209,28 @@ end
 # A SPH MODEL FOR PREDICTION OF OIL SLICK DIAMETER IN
 # THE GRAVITY-INERTIAL SPREADING PHASE
 ###################################################################################
+"""
+    
+    cspmcorr!(∑ρcspm1, ∑ρcspm2, ρ, m₀, pairs, points, sphkernel, H⁻¹)
+
+
+"""
+function cspmcorr!(∑ρcspm1, ∑ρcspm2, ρ, m₀, pairs, points, sphkernel, H⁻¹)
+    gpukernel = @cuda launch=false kernel_cspmcorr!(∑ρcspm1, ∑ρcspm2, ρ, m₀, pairs, points, sphkernel, H⁻¹) 
+    config = launch_configuration(gpukernel.fun)
+    Nx = length(pairs)
+    maxThreads = config.threads
+    Tx  = min(maxThreads, Nx)
+    Bx = cld(Nx, Tx)
+    CUDA.@sync gpukernel(∑ρcspm1, ∑ρcspm2, ρ, m₀, pairs, points, sphkernel, H⁻¹; threads = Tx, blocks = Bx)
+end
 function kernel_cspmcorr!(∑ρcspm1, ∑ρcspm2, ρ, m₀, pairs, points, sphkernel, H⁻¹) 
     index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
 
     if index <= length(pairs)
         pair  = pairs[index]
-        pᵢ    = pair[1]; pⱼ = pair[2]; d = pair[3]
-        if !isnan(d)
+        pᵢ    = pair[1]; pⱼ = pair[2]
+        if pᵢ != 0
             η²    = (0.1 * l₀) * (0.1 * l₀)
             xᵢ    = points[pᵢ]
             xⱼ    = points[pⱼ]
@@ -1213,32 +1251,31 @@ function kernel_cspmcorr!(∑ρcspm1, ∑ρcspm2, ρ, m₀, pairs, points, sphke
     end
     return nothing
 end
+#####################################################################
+# XSPH Correction 
+#####################################################################
 """
     
-    cspmcorr!(∑ρcspm1, ∑ρcspm2, ρ, m₀, pairs, points, sphkernel, H⁻¹)
+    xsphcorr!(∑Δvxsph, v, ρ, W, pairs, m₀)
 
 
 """
-function cspmcorr!(∑ρcspm1, ∑ρcspm2, ρ, m₀, pairs, points, sphkernel, H⁻¹)
-    gpukernel = @cuda launch=false kernel_cspmcorr!(∑ρcspm1, ∑ρcspm2, ρ, m₀, pairs, points, sphkernel, H⁻¹) 
+function xsphcorr!(∑Δvxsph, v, ρ, W, pairs, m₀)
+    gpukernel = @cuda launch=false kernel_xsphcorr!(∑Δvxsph, v, ρ, W, pairs, m₀) 
     config = launch_configuration(gpukernel.fun)
     Nx = length(pairs)
     maxThreads = config.threads
     Tx  = min(maxThreads, Nx)
     Bx = cld(Nx, Tx)
-    CUDA.@sync gpukernel(∑ρcspm1, ∑ρcspm2, ρ, m₀, pairs, points, sphkernel, H⁻¹; threads = Tx, blocks = Bx)
+    CUDA.@sync gpukernel(∑Δvxsph, v, ρ, W, pairs, m₀; threads = Tx, blocks = Bx)
 end
-
-#####################################################################
-# XSPH Correction 
-#####################################################################
 function kernel_xsphcorr!(∑Δvxsph, v, ρ, W, pairs, m₀) 
     index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
 
     if index <= length(pairs)
         pair  = pairs[index]
-        pᵢ    = pair[1]; pⱼ = pair[2]; d = pair[3]
-        if !isnan(d)
+        pᵢ    = pair[1]; pⱼ = pair[2]
+        if pᵢ != 0
             Δv    = (v[pᵢ][1] - v[pⱼ][1], v[pᵢ][2] - v[pⱼ][2])
             ρᵢ    = ρ[pᵢ]
             ρⱼ    = ρ[pⱼ]
@@ -1255,19 +1292,4 @@ function kernel_xsphcorr!(∑Δvxsph, v, ρ, W, pairs, m₀)
         end
     end
     return nothing
-end
-"""
-    
-    xsphcorr!(∑Δvxsph, v, ρ, W, pairs, m₀)
-
-
-"""
-function xsphcorr!(∑Δvxsph, v, ρ, W, pairs, m₀)
-    gpukernel = @cuda launch=false kernel_xsphcorr!(∑Δvxsph, v, ρ, W, pairs, m₀) 
-    config = launch_configuration(gpukernel.fun)
-    Nx = length(pairs)
-    maxThreads = config.threads
-    Tx  = min(maxThreads, Nx)
-    Bx = cld(Nx, Tx)
-    CUDA.@sync gpukernel(∑Δvxsph, v, ρ, W, pairs, m₀; threads = Tx, blocks = Bx)
 end

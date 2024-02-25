@@ -48,6 +48,6 @@ sphprob =  SPHProblem(system, h, H, sphkernel, ρ, v, ptype, ρ₀, m₀, Δt, �
 sphprob.dpc_l₀   = 0.01
 sphprob.dpc_λ    = 0.01
 sphprob.dpc_pmax = 36000
-timesolve!(sphprob; batch = 100, timeframe = 1.0, writetime = 0.01, path = "D:/vtk/", pvc = true, anim = true)
+timesolve!(sphprob; batch = 100, timeframe = 1.1, writetime = 0.01, path = "D:/vtk/", pvc = true, anim = true)
 
 #makedf(sphprob)

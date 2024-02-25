@@ -802,3 +802,68 @@ verts = empty(MeshCell{WriteVTK.PolyData.Verts,UnitRange{Int64}}[])
             end
 
         end
+
+
+
+
+
+
+
+
+
+
+
+
+
+        using CUDA
+
+        function test!(x) 
+            gpukernel = @cuda launch=false kernel_test!(x) 
+            config = launch_configuration(gpukernel.fun)
+            Nx = length(x)
+            maxThreads = config.threads
+            #maxBlocks  = config.blocks
+            Tx  = min(maxThreads, Nx)
+            #Bx  = min(maxBlocks, cld(Nx, Tx))
+            Bx  = cld(Nx, Tx)
+            CUDA.@sync gpukernel(x; threads = Tx, blocks = Bx)
+        end
+        function kernel_test!(x) 
+            index  = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
+            stride = gridDim().x * blockDim().x
+            i = index
+            n = 1
+            while  i <= length(x)
+                x[i] = n
+                i += stride
+                n += 1
+            end
+            return nothing
+        end
+        x = CUDA.zeros(1000000000)
+        test!(x) 
+        sum(x)
+
+
+        function test2!(x) 
+            gpukernel = @cuda launch=false kernel_test2!(x) 
+            config = launch_configuration(gpukernel.fun)
+            Nx = length(x)
+            maxThreads = config.threads
+            maxThreads = 3
+            Tx  = min(maxThreads, Nx)
+            CUDA.@sync gpukernel(x; threads = Tx, blocks = 1)
+        end
+        function kernel_test2!(x) 
+            index  = threadIdx().x
+            stride = blockDim().x
+            i = index
+            while i <= length(x)
+                @cuprintln "i = $i, index = $index, threadIdx: $(threadIdx().x), blockIdx $(blockIdx().x), blockDim $(blockDim().x)" 
+                i += stride
+            end
+            return nothing
+        end
+        test2!(CUDA.zeros(10)) 
+
+        @benchmark minmax(34, 23)

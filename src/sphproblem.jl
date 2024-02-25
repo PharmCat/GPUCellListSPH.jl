@@ -25,13 +25,13 @@ struct Effective  <: SimWorkLoad end
 
 SPH simulation data structure.
 """
-mutable struct SPHProblem
+mutable struct SPHProblem{T}
     system::GPUCellList
     dim::Int
-    h::Float64                                  # smoothing length
-    h⁻¹::Float64
-    H::Float64                                  # kernel support radius (2h)
-    H⁻¹::Float64
+    h::T                                  # smoothing length
+    h⁻¹::T
+    H::T                                  # kernel support radius (2h)
+    H⁻¹::T
     sphkernel::AbstractSPHKernel                # SPH kernel from SPHKernels.jl
     ∑W::CuArray                                 # sum of kernel values
     ∑∇W                                         # sum of kernel gradients
@@ -48,50 +48,50 @@ mutable struct SPHProblem
     xΔt½::CuArray                               # coordinates at xΔt½
     P::CuArray                                  # pressure (Equation of State in Weakly-Compressible SPH)
     ptype::CuArray                              # particle type: 1 - fluid 1; 0 - boundary; -1 boundary hard layer 
-    ρ₀::Float64                                 # Reference density
-    m₀::Float64                                 # Initial mass
-    Δt::Float64                                 # default Δt
-    α::Float64                                  # Artificial viscosity alpha constant
-    g::Float64                                  # gravity constant
-    c₀::Float64                                 # speed of sound
+    ρ₀::T                                 # Reference density
+    m₀::T                                 # Initial mass
+    Δt::T                                 # default Δt
+    α::T                                  # Artificial viscosity alpha constant
+    g::T                                  # gravity constant
+    c₀::T                                 # speed of sound
     γ                                           # Gamma, 7 for water (used in the pressure equation of state)
-    s::Float64                                  # surface tension constant
-    δᵩ::Float64                                 # Coefficient for density diffusion, typically 0.1
-    CFL::Float64                                # CFL number for the simulation 
+    s::T                                  # surface tension constant
+    δᵩ::T                                 # Coefficient for density diffusion, typically 0.1
+    CFL::T                                # CFL number for the simulation 
     buf::CuArray                                # buffer for dt calculation
-    etime::Float64                              # simulation time
+    etime::T                              # simulation time
     cΔx                                         # cumulative location changes in batch
-    nui::Float64                                # non update interval, update if maximum(maximum.(abs, prob.cΔx)) > 0.9 * prob.nui  
+    nui::T                                # non update interval, update if maximum(maximum.(abs, prob.cΔx)) > 0.9 * prob.nui  
     # Dynamic Particle Collision (DPC) 
-    dpc_l₀::Float64       # minimal distance
-    dpc_pmin::Float64     # minimal pressure
-    dpc_pmax::Float64     # maximum pressure
-    dpc_λ::Float64        # λ is a non-dimensional adjusting parameter
-    function SPHProblem(system::GPUCellList, h::Float64, H::Float64, sphkernel::AbstractSPHKernel, ρ, v, ptype, ρ₀::Float64, m₀::Float64, Δt::Float64, α::Float64, g::Float64, c₀::Float64, γ, δᵩ::Float64, CFL::Float64; s::Float64 = 0.0)
+    dpc_l₀::T       # minimal distance
+    dpc_pmin::T     # minimal pressure
+    dpc_pmax::T     # maximum pressure
+    dpc_λ::T        # λ is a non-dimensional adjusting parameter
+    function SPHProblem(system::GPUCellList{T}, h::Float64, H::Float64, sphkernel::AbstractSPHKernel, ρ, v, ptype, ρ₀::Float64, m₀::Float64, Δt::Float64, α::Float64, g::Float64, c₀::Float64, γ, δᵩ::Float64, CFL::Float64; s::Float64 = 0.0) where T <: AbstractFloat
 
         dim = length(CUDA.@allowscalar first(system.points))
         N   = length(system.points)
 
-        ∑W      = CUDA.zeros(Float64, N)
-        ∑∇W     = Tuple(CUDA.zeros(Float64, N) for n in 1:dim)
-        W       = CUDA.zeros(Float64, length(system.pairs))
-        ∇W      = CUDA.fill(zero(NTuple{dim, Float64}), length(system.pairs))
-        ∑∂ρ∂t   = CUDA.zeros(Float64, N)
+        ∑W      = CUDA.zeros(T, N)
+        ∑∇W     = Tuple(CUDA.zeros(T, N) for n in 1:dim)
+        W       = CUDA.zeros(T, length(system.pairs))
+        ∇W      = CUDA.fill(zero(NTuple{dim, T}), length(system.pairs))
+        ∑∂ρ∂t   = CUDA.zeros(T, N)
 
-        ∑∂Π∂t   = Tuple(CUDA.zeros(Float64, N) for n in 1:dim)
+        ∑∂Π∂t   = Tuple(CUDA.zeros(T, N) for n in 1:dim)
 
-        ∑∂v∂t   = Tuple(CUDA.zeros(Float64, N) for n in 1:dim)
+        ∑∂v∂t   = Tuple(CUDA.zeros(T, N) for n in 1:dim)
 
-        ∑Δvdpc = Tuple(CUDA.zeros(Float64, N) for n in 1:dim)
+        ∑Δvdpc = Tuple(CUDA.zeros(T, N) for n in 1:dim)
 
-        buf     = CUDA.zeros(Float64, N)
+        buf     = CUDA.zeros(T, N)
 
         ρΔt½    = CUDA.deepcopy(ρ)
         vΔt½    = CUDA.deepcopy(v)
         xΔt½    = CUDA.deepcopy(system.points)
-        cΔx     = Tuple(CUDA.zeros(Float64, N) for n in 1:dim)
-        P       = CUDA.zeros(Float64, N)
-        new{}(system, 
+        cΔx     = Tuple(CUDA.zeros(T, N) for n in 1:dim)
+        P       = CUDA.zeros(T, N)
+        new{T}(system, 
         dim, 
         h, 
         1/h, 
@@ -146,7 +146,7 @@ timelims - minimal and maximum values for Δt
 function stepsolve!(prob::SPHProblem, n::Int = 1; simwl::SimWorkLoad = StepByStep(), kwargs...)
     _stepsolve!(prob, n, simwl;  kwargs...)
 end
-function _stepsolve!(prob::SPHProblem, n::Int, ::StepByStep; timestepping = false, timelims = (sqrt(eps()), prob.CFL * prob.H /3prob.c₀), verbode = true)
+function _stepsolve!(prob::SPHProblem{T}, n::Int, ::StepByStep; timestepping = false, timelims = (sqrt(eps()), prob.CFL * prob.H /3prob.c₀), verbode = true) where T
     if timestepping && timelims[1] > timelims[1] error("timelims[1] should be < timelims[2]") end
 
     x              = prob.system.points
@@ -167,28 +167,28 @@ function _stepsolve!(prob::SPHProblem, n::Int, ::StepByStep; timestepping = fals
             x           = prob.system.points
             pairs       = neighborlist(prob.system)
             sort!(pairs, by = first)
-            for a in prob.cΔx fill!(a, zero(Float64)) end
+            for a in prob.cΔx fill!(a, zero(T)) end
             skipupdate  = true
             updaten += 1 
         end
 
 
-        fill!(prob.∑∂ρ∂t, zero(Float64))
+        fill!(prob.∑∂ρ∂t, zero(T))
 
-        fill!(prob.∑∂Π∂t[1], zero(Float64))
-        fill!(prob.∑∂v∂t[1], zero(Float64))
+        fill!(prob.∑∂Π∂t[1], zero(T))
+        fill!(prob.∑∂v∂t[1], zero(T))
         #fill!(prob.∑∂v∂tdpc[1], zero(Float64))
 
-        fill!(prob.∑∂Π∂t[2], zero(Float64))
-        fill!(prob.∑∂v∂t[2], zero(Float64))
+        fill!(prob.∑∂Π∂t[2], zero(T))
+        fill!(prob.∑∂v∂t[2], zero(T))
         #fill!(prob.∑∂v∂tdpc[2], zero(Float64))
 
 
         if length(prob.∇W) != length(pairs)
             CUDA.unsafe_free!(prob.∇W)
             CUDA.unsafe_free!(prob.W)
-            prob.∇W =  CUDA.fill((zero(Float64), zero(Float64)), length(pairs)) # DIM = 2
-            prob.W =  CUDA.fill(zero(Float64), length(pairs))
+            prob.∇W =  CUDA.fill((zero(T), zero(Float64)), length(pairs)) # DIM = 2
+            prob.W =  CUDA.fill(zero(T), length(pairs))
         end
         # kernels for each pair
         W_2d!(prob.W, pairs, x, prob.sphkernel, prob.H⁻¹)
@@ -219,15 +219,15 @@ function _stepsolve!(prob::SPHProblem, n::Int, ::StepByStep; timestepping = fals
 
         # set derivative to zero for Δt½ calc
 
-        fill!(prob.∑∂ρ∂t, zero(Float64))
+        fill!(prob.∑∂ρ∂t, zero(T))
 
-        fill!(prob.∑∂Π∂t[1], zero(Float64))
-        fill!(prob.∑∂v∂t[1], zero(Float64))
-        fill!(prob.∑Δvdpc[1], zero(Float64))
+        fill!(prob.∑∂Π∂t[1], zero(T))
+        fill!(prob.∑∂v∂t[1], zero(T))
+        fill!(prob.∑Δvdpc[1], zero(T))
 
-        fill!(prob.∑∂Π∂t[2], zero(Float64))
-        fill!(prob.∑∂v∂t[2], zero(Float64))
-        fill!(prob.∑Δvdpc[2], zero(Float64))
+        fill!(prob.∑∂Π∂t[2], zero(T))
+        fill!(prob.∑∂v∂t[2], zero(T))
+        fill!(prob.∑Δvdpc[2], zero(T))
 
         # density derivative with density diffusion at  xΔt½ 
         ∂ρ∂tDDT!(prob.∑∂ρ∂t,  prob.∇W, pairs, prob.xΔt½, prob.h, prob.m₀, prob.δᵩ, prob.c₀, prob.γ, prob.g, prob.ρ₀, prob.ρ, prob.v, prob.ptype) 
@@ -266,9 +266,9 @@ function _stepsolve!(prob::SPHProblem, n::Int, ::StepByStep; timestepping = fals
 
     end
     # update summs and gradiends after bath 
-    fill!(prob.∑W, zero(Float64))
-    fill!(prob.∑∇W[1], zero(Float64))
-    fill!(prob.∑∇W[2], zero(Float64))
+    fill!(prob.∑W, zero(T))
+    fill!(prob.∑∇W[1], zero(T))
+    fill!(prob.∑∇W[2], zero(T))
     ∑W_2d!(prob.∑W, pairs, x, prob.sphkernel, prob.H⁻¹)
     ∑∇W_2d!(prob.∑∇W, pairs, x, prob.sphkernel, prob.H⁻¹)
     updaten, maxcΔxout

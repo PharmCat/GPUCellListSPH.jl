@@ -1,16 +1,16 @@
-mutable struct GPUCellList
+mutable struct GPUCellList{T <: AbstractFloat}
     n::Int
-    dist::Float64
-    cs
-    offset
-    grid
-    points::CuArray
-    pcell::CuArray
-    pvec::CuArray
-    cellpnum::CuArray
+    dist::T
+    cs::Tuple{Vararg{T}}
+    offset::Tuple{Vararg{T}}
+    grid::Tuple{Vararg{Int}}
+    points::CuArray{<: Tuple{Vararg{T}}}
+    pcell::CuArray{Tuple{Int32, Int32}}
+    #pvec::CuArray{Int32}
+    cellpnum::CuArray{Int32}
     cnt::CuArray
-    celllist::CuArray
-    pairs::CuArray
+    celllist::CuArray{Int32}
+    pairs::CuArray{Tuple{Int32, Int32}}
     pairsn::Int
 end
 
@@ -19,13 +19,13 @@ end
 
 Make cell list structure.
 """
-function GPUCellList(points, cellsize, dist; mppcell = 0, mpairs = 0)
+function GPUCellList(points::AbstractArray{<: Tuple{Vararg{T}}}, cellsize, dist::T; mppcell = 0, mpairs = 0) where T <: AbstractFloat
     el = first(points)
     if length(el) < 2 error("wrong dimention") end
 
     N = length(points)                                          # Number of points 
     pcell = CUDA.fill((Int32(0), Int32(0)), N)                  # list of cellst for each particle
-    pvec  = CUDA.zeros(Int32, N)                                # vector for sorting method fillcells_psort_2d!
+    #pvec  = CUDA.zeros(Int32, N)                                # vector for sorting method fillcells_psort_2d!
     cs1 = cellsize[1]                                           # cell size by 1-dim
     cs2 = cellsize[2]                                           # cell size by 2-dim 
     if cs1 < dist 
@@ -73,7 +73,7 @@ function GPUCellList(points, cellsize, dist; mppcell = 0, mpairs = 0)
         mpairs = мaxpairs_2d(cellpnum)                                                 # mpairs - maximum pairs in pair list (all combination inside cell and neighboring cells (4))
     end
     
-    pairs    = CUDA.fill((zero(Int32), zero(Int32), NaN), mpairs)                      # pair list
+    pairs    = CUDA.fill((zero(Int32), zero(Int32)), mpairs)                      # pair list
     fill!(cnt, zero(Int32))                                                            # fill cell pairs counter before neib calk
     neib_internal_2d!(pairs, cnt, cellpnum, points, celllist, dist)                    # modify cnt, pairs < add pairs inside cell
     neib_external_2d!(pairs, cnt, cellpnum, points, celllist,  (1, -1), dist)          # modify cnt, pairs < add pairs between cell and neiborhood cell by shift (-1, 1) in grid
@@ -87,12 +87,12 @@ function GPUCellList(points, cellsize, dist; mppcell = 0, mpairs = 0)
     end
     if total_pairs < mpairs * 0.8                                                              # if calculated pairs num < 0.8 list length - make  new list with 20% additional pairs
         new_pairn  = Int(ceil(total_pairs / 0.8))
-        new_pairs  = CUDA.fill((zero(Int32), zero(Int32), NaN), new_pairn)
+        new_pairs  = CUDA.fill((zero(Int32), zero(Int32)), new_pairn)
         copyto!(new_pairs, view(pairs, 1:new_pairn))
         CUDA.unsafe_free!(pairs)
         pairs      = new_pairs
     end
-    GPUCellList(N, dist, (cs1, cs2), (MIN1, MIN2), (CELL1, CELL2), points, pcell, pvec, cellpnum, cnt, celllist, pairs, total_pairs)
+    GPUCellList{T}(N, dist, (cs1, cs2), (MIN1, MIN2), (CELL1, CELL2), points, pcell, cellpnum, cnt, celllist, pairs, total_pairs)
 end
 
 """
@@ -125,9 +125,9 @@ Full update cell grid.
 
     if c.pairsn > length(c.pairs) || c.pairsn < length(c.pairs) * 0.6                       # if current number of pairs more than pair list or too small - then resize
         CUDA.unsafe_free!(c.pairs)
-        c.pairs    = CUDA.fill((zero(Int32), zero(Int32), NaN), Int(ceil(c.pairsn/0.8))) 
+        c.pairs    = CUDA.fill((zero(Int32), zero(Int32)), Int(ceil(c.pairsn/0.8))) 
     else
-        fill!(c.pairs, (zero(Int32), zero(Int32), NaN))
+        fill!(c.pairs, (zero(Int32), zero(Int32)))
     end
 
     neib_internal_2d!(c.pairs, c.cnt, c.cellpnum, c.points, c.celllist, c.dist)
@@ -141,7 +141,7 @@ Full update cell grid.
     if c.pairsn > length(c.pairs)
         fill!(c.cnt, zero(Int32))
         CUDA.unsafe_free!(c.pairs)
-        c.pairs    = CUDA.fill((zero(Int32), zero(Int32), NaN), Int(ceil(c.pairsn/0.8))) 
+        c.pairs    = CUDA.fill((zero(Int32), zero(Int32)), Int(ceil(c.pairsn/0.8))) 
         neib_internal_2d!(c.pairs, c.cnt, c.cellpnum, c.points, c.celllist, c.dist)
         neib_external_2d!(c.pairs, c.cnt, c.cellpnum, c.points, c.celllist,  (1, -1), c.dist)
         neib_external_2d!(c.pairs, c.cnt, c.cellpnum, c.points, c.celllist,  (0,  1), c.dist)
@@ -159,7 +159,7 @@ Update only distance
 """
 @noinline function partialupdate!(c::GPUCellList)
     fill!(c.cnt, zero(Int32))
-    fill!(c.pairs, (zero(Int32), zero(Int32), NaN))
+    fill!(c.pairs, (zero(Int32), zero(Int32)))
     neib_internal_2d!(c.pairs, c.cnt, c.cellpnum, c.points, c.celllist, c.dist)
     neib_external_2d!(c.pairs, c.cnt, c.cellpnum, c.points, c.celllist,  (1, -1), c.dist)
     neib_external_2d!(c.pairs, c.cnt, c.cellpnum, c.points, c.celllist,  (0,  1), c.dist)
