@@ -205,13 +205,18 @@ function neib_external_2d!(pairs, cnt, cellpnum, points, celllist, offset, dist)
     Bx, By = cld(Nx, Tx), cld(Ny, Ty)  # Blocks in grid.
     threads = (Tx, Ty)
     blocks  = Bx, By
-    cs = fld(attribute(device(), CUDA.DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN),  Tx * Ty * sizeof(Tuple{Int32, Int32}))
-    CUDA.@sync gpukernel(pairs, cnt, cellpnum, points, celllist, offset, dist², cs; threads = threads, blocks = blocks, shmem= Tx * Ty * cs * sizeof(Tuple{Int32, Int32}))
+    cs = fld(attribute(device(), CUDA.DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN) - 8,  Tx * Ty * sizeof(Tuple{Int32, Int32}))
+    CUDA.@sync gpukernel(pairs, cnt, cellpnum, points, celllist, offset, dist², cs; threads = threads, blocks = blocks, shmem= Tx * Ty * cs * sizeof(Tuple{Int32, Int32}) + 8)
 end
 function kernel_neib_external_2d!(pairs, cnt, cellpnum, points, celllist,  offset, dist², cs)
     indexᵢ = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
     indexⱼ = (blockIdx().y - Int32(1)) * blockDim().y + threadIdx().y 
-    cache  = CuDynamicSharedArray(Tuple{Int32, Int32}, blockDim().x * blockDim().y * cs)
+    #scnt   = CuDynamicSharedArray(Int32, 1)
+    cache  = CuDynamicSharedArray(Tuple{Int32, Int32}, blockDim().x * blockDim().y * cs, 8)
+    #if threadIdx().x == 1 && threadIdx().y == 1 
+    #    scnt[1] = cnt[1]
+    #end
+    #sync_threads()
     Nx, Ny = size(cellpnum)
     neibcellᵢ = indexᵢ + offset[1]
     neibcellⱼ = indexⱼ + offset[2]
@@ -229,13 +234,13 @@ function kernel_neib_external_2d!(pairs, cnt, cellpnum, points, celllist,  offse
                     cache[lind + ccnt] = minmax(i, j)
                     ccnt += 1
                     if ccnt == cs
-                        ccnt = 0
-                        s  = CUDA.@atomic cnt[1] += cs
-                        if s + cs <=length(pairs)
+                        s  = CUDA.@atomic cnt[1] += ccnt
+                        if s + ccnt <=length(pairs)
                             for cind in 1:cs
                                 pairs[s+cind] = cache[lind + cind - 1]
                             end
                         end
+                        ccnt = 0
                     end
                 end
             end  
@@ -249,6 +254,10 @@ function kernel_neib_external_2d!(pairs, cnt, cellpnum, points, celllist,  offse
             end
         end
     end
+    #sync_threads()
+    #if threadIdx().x == 1 && threadIdx().y == 1 
+    #    cnt[1] = scnt[1]
+    #end
     return nothing
 end
 #####################################################################
@@ -304,9 +313,9 @@ end
 #####################################################################
 """
 
-    W_2d!(sumW, pairs, sphkernel, H⁻¹) 
+    W_2d!(W, pairs, sphkernel, H⁻¹) 
 
-Compute W for each particles pair in list.
+Compute kernel values for each particles pair in list. Update `W`. See SPHKernels.jl for details.
 """
 function W_2d!(W, pairs, points, sphkernel, H⁻¹) 
     gpukernel = @cuda launch=false kernel_W_2d!(W, pairs, points, sphkernel, H⁻¹) 
@@ -339,9 +348,9 @@ end
 #####################################################################
 """
 
-    ∑W_2d!(sumW, pairs, sphkernel, H⁻¹) 
+    ∑W_2d!(∑W, pairs, sphkernel, H⁻¹) 
 
-Compute ∑W for each particles pair in list.
+Compute sum of kernel values for each particles pair in list. Add to `∑W`. See SPHKernels.jl for details.
 """
 function ∑W_2d!(∑W, pairs, points, sphkernel, H⁻¹) 
     gpukernel = @cuda launch=false kernel_∑W_2d!(∑W, pairs, points, sphkernel, H⁻¹) 
@@ -375,7 +384,7 @@ end
     
     ∇W_2d!(∇W, pairs, points, kernel, H⁻¹) 
 
-Compute gradients. Update ∇W.
+Compute gradients. Update `∇W`. See SPHKernels.jl for details.
 
 """
 function ∇W_2d!(∇W, pairs, points, kernel, H⁻¹) 
@@ -409,7 +418,7 @@ end
     
     ∑∇W_2d!(∑∇W, ∇W, pairs, points, kernel, H⁻¹) 
 
-Compute gradients. Update ∑∇W and ∇W.
+Compute gradients. Add sum to `∑∇W` and update `∇W`. See SPHKernels.jl for details.
 
 """
 function ∑∇W_2d!(∑∇W, ∇W, pairs, points, kernel, H⁻¹) 
@@ -450,6 +459,22 @@ function kernel_∑∇W_2d!(∑∇W, ∇W, pairs, points, kernel, H⁻¹)
     return nothing
 end
 #####################################################################
+"""
+    
+    ∑∇W_2d!(∑∇W, pairs, points, kernel, H⁻¹) 
+
+Compute gradients. Add sum to ∑∇W. See SPHKernels.jl for details.
+
+"""
+function ∑∇W_2d!(∑∇W, pairs, points, kernel, H⁻¹) 
+    gpukernel = @cuda launch=false kernel_∑∇W_2d!(∑∇W, pairs, points, kernel, H⁻¹) 
+    config = launch_configuration(gpukernel.fun)
+    Nx = length(pairs)
+    maxThreads = config.threads
+    Tx  = min(maxThreads, Nx)
+    Bx = cld(Nx, Tx)
+    CUDA.@sync gpukernel(∑∇W, pairs, points, kernel, H⁻¹; threads = Tx, blocks = Bx)
+end
 function kernel_∑∇W_2d!(∑∇W, pairs, points, kernel, H⁻¹) 
     index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
     if index <= length(pairs)
@@ -474,23 +499,6 @@ function kernel_∑∇W_2d!(∑∇W, pairs, points, kernel, H⁻¹)
     end
     return nothing
 end
-"""
-    
-    ∑∇W_2d!(∑∇W, pairs, points, kernel, H⁻¹) 
-
-Compute gradients. Update ∑∇W.
-
-"""
-function ∑∇W_2d!(∑∇W, pairs, points, kernel, H⁻¹) 
-    gpukernel = @cuda launch=false kernel_∑∇W_2d!(∑∇W, pairs, points, kernel, H⁻¹) 
-    config = launch_configuration(gpukernel.fun)
-    Nx = length(pairs)
-    maxThreads = config.threads
-    Tx  = min(maxThreads, Nx)
-    Bx = cld(Nx, Tx)
-    CUDA.@sync gpukernel(∑∇W, pairs, points, kernel, H⁻¹; threads = Tx, blocks = Bx)
-end
-
 
 #####################################################################
 """
@@ -606,7 +614,47 @@ end
     ∂Π∂t!(∑∂Π∂t, ∇W, pairs, points, h, ρ, α, v, c₀, m₀)
 
 
-Compute ∂Π∂t - artificial viscosity.
+Compute ∂Π∂t - artificial viscosity. Add to `∑∂Π∂t`
+
+```math
+
+\\Pi_{ij} = \\begin{cases} \\frac{- \\alpha \\overline{c}_{ij} \\mu_{ij} + \\beta \\mu_{ij}^2 }{\\overline{\rho}_{ij}} &  \\textbf{v}_{ij}\\cdot \\textbf{r}_{ij} < 0 \\\\ 0 &  otherwise \\end{cases}
+
+\\\\
+\\\\
+
+\\mu_{ij} = \\frac{h \\textbf{v}_{ij}\\cdot \\textbf{r}_{ij}}{r_{ij}^2 + \\eta^2}
+
+\\\\
+\\\\
+
+\\overline{c}_{ij}  = \\frac{c_i + c_j}{2}
+
+\\\\
+\\\\
+
+\\overline{\\rho}_{ij} = \\frac{\\rho_i + \\rho_j}{2}
+
+\\\\
+\\\\
+
+\\beta = 0
+
+\\c_{ij} = c_0
+
+\\m_i = m_j = m_0
+
+```
+
+Artificial viscosity part of momentum equation. 
+
+```math
+
+\\frac{\\partial \\textbf{v}_i}{\\partial t} = - \\sum  m_j \\Pi_{ij} \\nabla_i W_{ij}
+```
+
+J. Monaghan, Smoothed Particle Hydrodynamics, “Annual Review of Astronomy and Astrophysics”, 30 (1992), pp. 543-574.
+
 """
 function ∂Π∂t!(∑∂Π∂t, ∇W, pairs, points, h, ρ, α, v, c₀, m₀) 
     gpukernel = @cuda launch=false kernel_∂Π∂t!(∑∂Π∂t, ∇W, pairs, points, h, ρ, α, v, c₀, m₀) 
@@ -655,10 +703,7 @@ function kernel_∂Π∂t!(∑∂Π∂t, ∇Wₙ, pairs, points, h, ρ, α, v, c
                     @cuprintln "kernel Π: Π = $ΔΠ ,  W = $(∇W[1])"
                     error() 
                 end
-                #CUDA.@atomic ∑∂Π∂t[pᵢ, 1] += ΔΠm₀∇W[1]
-                #CUDA.@atomic ∑∂Π∂t[pᵢ, 2] += ΔΠm₀∇W[2]
-                #CUDA.@atomic ∑∂Π∂t[pⱼ, 1] -= ΔΠm₀∇W[1]
-                #CUDA.@atomic ∑∂Π∂t[pⱼ, 2] -= ΔΠm₀∇W[2]
+
                 ∑∂Π∂tˣ = ∑∂Π∂t[1]
                 ∑∂Π∂tʸ = ∑∂Π∂t[2]   
                 CUDA.@atomic ∑∂Π∂tˣ[pᵢ] += ΔΠm₀∇W[1]
@@ -699,7 +744,6 @@ end
     pressure!(P, ρ, ρ₀, c₀, γ) 
 
 Equation of State in Weakly-Compressible SPH.
-
 
 
 """
@@ -765,10 +809,7 @@ function kernel_∂v∂t!(∑∂v∂t, ∇Wₙ, P, pairs, m, ρ)
                 error() 
             end
             =#
-            #CUDA.@atomic ∑∂v∂t[pᵢ, 1] +=  ∂v∂t[1]
-            #CUDA.@atomic ∑∂v∂t[pᵢ, 2] +=  ∂v∂t[2]
-            #CUDA.@atomic ∑∂v∂t[pⱼ, 1] -=  ∂v∂t[1]
-            #CUDA.@atomic ∑∂v∂t[pⱼ, 2] -=  ∂v∂t[2]
+
             ∑∂v∂tˣ = ∑∂v∂t[1]
             ∑∂v∂tʸ = ∑∂v∂t[2]   
             CUDA.@atomic ∑∂v∂tˣ[pᵢ] +=  ∂v∂t[1]
@@ -1086,7 +1127,7 @@ Dynamic Particle Collision (DPC) correction.
 
 \\\\
 
-(v_{ij}^{coll} , \\quad \\phi_{ij}) = \\begin{cases} (\\frac{\\textbf{v}_{ij}\\cdot \\textbf{r}_{ij}}{r_{ij}^2 + \\eta^2}\textbf{r}_{ji}, \\quad 0) & \\textbf{v}_{ij}\\cdot \\textbf{r}_{ij} < 0 \\\\ (0, \\quad 1) &  otherwise \\end{cases}
+(v_{ij}^{coll} , \\quad \\phi_{ij}) = \\begin{cases} (\\frac{\\textbf{v}_{ij}\\cdot \\textbf{r}_{ij}}{r_{ij}^2 + \\eta^2}\\textbf{r}_{ji}, \\quad 0) & \\textbf{v}_{ij}\\cdot \\textbf{r}_{ij} < 0 \\\\ (0, \\quad 1) &  otherwise \\end{cases}
 
 \\\\
 p_{ij}^b = \\tilde{p}_{ij} \\chi_{ij} 
@@ -1208,12 +1249,16 @@ end
 # https://upcommons.upc.edu/bitstream/handle/2117/187607/Particles_2017-82_A%20SPH%20model%20for%20prediction.pdf
 # A SPH MODEL FOR PREDICTION OF OIL SLICK DIAMETER IN
 # THE GRAVITY-INERTIAL SPREADING PHASE
+# Carlos Alberto Dutra Fraga Filho, Reflective Boundary Conditions Coupled With the SPH Method for 
+# the Three-Dimensional Simulation of Fluid-Structure Interaction With Solid Boundaries
 ###################################################################################
 """
     
     cspmcorr!(∑ρcspm1, ∑ρcspm2, ρ, m₀, pairs, points, sphkernel, H⁻¹)
 
+Corrected Smoothed Particle Method (CSPM) Density Renormalisation.
 
+Chen JK, Beraun JE, Carney TC (1999) A corrective smoothed particle method for boundary value problems in heat conduction. Int. J. Num. Meth. Engng. https://doi.org/10.1002/(SICI)1097-0207(19990920)46:2<231::AID-NME672>3.0.CO;2-K
 """
 function cspmcorr!(∑ρcspm1, ∑ρcspm2, ρ, m₀, pairs, points, sphkernel, H⁻¹)
     gpukernel = @cuda launch=false kernel_cspmcorr!(∑ρcspm1, ∑ρcspm2, ρ, m₀, pairs, points, sphkernel, H⁻¹) 
@@ -1258,7 +1303,17 @@ end
     
     xsphcorr!(∑Δvxsph, v, ρ, W, pairs, m₀)
 
+The XSPH correction.
 
+```math
+
+\\hat{\\textbf{v}_{i}} = - \\epsilon \\sum m_j \\frac{\\textbf{v}_{ij}}{\\overline{\\rho}_{ij}} W_{ij}
+
+```
+
+* Monaghan JJ (1989) On the problem of penetration in particle methods. J Comput Phys. https://doi.org/10.1016/0021-9991(89)90032-6
+
+Carlos Alberto Dutra Fraga Filho, Reflective Boundary Conditions Coupled With the SPH Method for the Three-Dimensional Simulation of Fluid-Structure Interaction With Solid Boundaries
 """
 function xsphcorr!(∑Δvxsph, v, ρ, W, pairs, m₀)
     gpukernel = @cuda launch=false kernel_xsphcorr!(∑Δvxsph, v, ρ, W, pairs, m₀) 

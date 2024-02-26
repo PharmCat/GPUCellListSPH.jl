@@ -48,7 +48,7 @@ function GPUCellList(points::AbstractArray{<: Tuple{Vararg{T}}}, cellsize, dist:
     CELL2  = ceil(Int, range2/cs2)                              # number of cells 2-dim
 
     cellpnum     = CUDA.zeros(Int32, CELL1, CELL2)              # 2-dim array for number of particles in each cell 
-    cnt          = CUDA.zeros(Int, 1)                           # temp array for particles counter (need to count place for each pair in pair list)
+    cnt          = CUDA.zeros(Int32, 1)                           # temp array for particles counter (need to count place for each pair in pair list)
     points       = cu(points)                                   # array with particles / points
 
     #cellmap_2d!(pcell, points, (cs1, cs2), (MIN1, MIN2))        # modify pcell < assign cell to each particle
