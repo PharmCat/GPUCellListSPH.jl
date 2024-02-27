@@ -531,8 +531,11 @@ Compute ∂ρ∂t - density derivative includind density diffusion.
 
 ```math
 
-\\frac{\\partial \\rho_i}{\\partial t} = \\sum  m_j \\textbf{v}_{ij} \\cdot \\nabla_i W_{ij} + \\delta_{\Phi} h c_0 \\sum \\Psi_{ij} \\cdot \\nabla_i W_{ij} \\frac{m_j}{\\rho_j}
+\\frac{\\partial \\rho_i}{\\partial t} = \\sum  m_j \\textbf{v}_{ij} \\cdot \\nabla_i W_{ij} + \\delta_{\\Phi} h c_0 \\sum \\Psi_{ij} \\cdot \\nabla_i W_{ij} \\frac{m_j}{\\rho_j}
 
+\\\\
+
+\\Psi_{ij} = 2 (\\rho_{ij}^T + \\rho_{ij}^H) \\frac{\\textbf{r}_{ij}}{r_{ij}^2 + \\eta^2}
 ```
 
 """
@@ -901,6 +904,11 @@ end
     ∂v∂t!(∑∂v∂t,  ∇Wₙ, pairs, m, ρ, c₀, γ, ρ₀) 
 
 The momentum equation (without dissipation).
+
+
+\\frac{\\partial \\textbf{v}_i}{\\partial t} = - \\sum  m_j \\left( \\frac{p_i}{\\rho^2_i} + \\frac{p_j}{\\rho^2_j} \\right) \\nabla_i W_{ij}
+
+
 """
 function ∂v∂t!(∑∂v∂t,  ∇W, P, pairs, m, ρ) 
     gpukernel = @cuda launch=false kernel_∂v∂t!(∑∂v∂t,  ∇W, P, pairs, m, ρ) 
