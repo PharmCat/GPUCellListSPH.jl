@@ -143,43 +143,46 @@ function neib_internal_2d!(pairs, cnt, cellpnum, points, celllist, dist)
     cs = fld(attribute(device(), CUDA.DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN),  Tx * Ty * sizeof(Tuple{Int32, Int32}))
     CUDA.@sync gpukernel(pairs, cnt, cellpnum, points, celllist, dist², cs; threads = threads, blocks = blocks, shmem= Tx * Ty * cs * sizeof(Tuple{Int32, Int32}))
 end
-function kernel_neib_internal_2d!(pairs, cnt, cellpnum, points, celllist, dist², cs) 
-    indexᵢ = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
-    indexⱼ = (blockIdx().y - Int32(1)) * blockDim().y + threadIdx().y
-    #indexₖ = (blockIdx().z - Int32(1)) * blockDim().z + threadIdx().z
+function kernel_neib_internal_2d!(pairs, cnt, cellpnum, points, celllist, dist², cs)  # cs - cache length for each thread
+    threadx = threadIdx().x
+    thready = threadIdx().y
+    indexᵢ = (blockIdx().x - Int32(1)) * blockDim().x + threadx
+    indexⱼ = (blockIdx().y - Int32(1)) * blockDim().y + thready
+    #indexₖ = (blockIdx().z - Int32(1)) * blockDim().z + threadIdx().z 
     Nx, Ny = size(cellpnum)
-    cache  = CuDynamicSharedArray(Tuple{Int32, Int32}, blockDim().x * blockDim().y * cs)
+    cache  = CuDynamicSharedArray(Tuple{Int32, Int32}, (cs, blockDim().x , blockDim().y))
     if indexᵢ <= Nx && indexⱼ <= Ny && cellpnum[indexᵢ, indexⱼ] > 1
-        lind  = indexᵢ + Ny * (indexⱼ - Int32(1))
         ccnt  = zero(Int32)
         len = cellpnum[indexᵢ, indexⱼ]
         for i = 1:len - 1
             indi = celllist[i, indexᵢ, indexⱼ]
-            pᵢ = points[indi]
+            pᵢ  = points[indi]
             for j = i + 1:len
                 indj = celllist[j, indexᵢ, indexⱼ]
-                pⱼ = points[indj]
-                distance = (pᵢ[1] - pⱼ[1])^2 + (pᵢ[2] - pⱼ[2])^2
+                pⱼ   = points[indj]
+                distance = (pᵢ[1] - pⱼ[1])^2 + (pᵢ[2] - pⱼ[2])^2 # calculate r² to awoid sqrt, compare with squared maximum distance dist²
                 if distance < dist²
-                    cache[lind + ccnt] = minmax(indi, indj)
+                    #n = CUDA.@atomic cnt[1] += 1
+                    #pairs[n+1] = minmax(indi, indj)
                     ccnt += 1
+                    cache[ccnt, threadx, thready] = minmax(indi, indj)
                     if ccnt == cs
-                        ccnt = 0
-                        s  = CUDA.@atomic cnt[1] += cs
-                        if s + cs <=length(pairs)
-                            for cind in 1:cs
-                                pairs[s+cind] = cache[lind + cind - 1]
+                        s  = CUDA.@atomic cnt[1] += ccnt
+                        if s + ccnt <=length(pairs)
+                            for cind in 1:ccnt
+                                pairs[s + cind] = cache[cind, threadx, thready]
                             end
                         end
+                        ccnt = 0
                     end
                 end
             end
         end
-        if ccnt != 0
-            s = CUDA.@atomic cnt[1] += ccnt
+        if ccnt > 0 
+            s  = CUDA.@atomic cnt[1] += ccnt
             if s + ccnt <=length(pairs)
-                for cind in 1:ccnt 
-                    pairs[s + cind] = cache[lind + cind - 1]
+                for cind in 1:ccnt
+                    pairs[s + cind] = cache[cind, threadx, thready]
                 end
             end
         end
@@ -205,23 +208,19 @@ function neib_external_2d!(pairs, cnt, cellpnum, points, celllist, offset, dist)
     Bx, By = cld(Nx, Tx), cld(Ny, Ty)  # Blocks in grid.
     threads = (Tx, Ty)
     blocks  = Bx, By
-    cs = fld(attribute(device(), CUDA.DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN) - 8,  Tx * Ty * sizeof(Tuple{Int32, Int32}))
-    CUDA.@sync gpukernel(pairs, cnt, cellpnum, points, celllist, offset, dist², cs; threads = threads, blocks = blocks, shmem= Tx * Ty * cs * sizeof(Tuple{Int32, Int32}) + 8)
+    cs = fld(attribute(device(), CUDA.DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN),  Tx * Ty * sizeof(Tuple{Int32, Int32}))
+    CUDA.@sync gpukernel(pairs, cnt, cellpnum, points, celllist, offset, dist², cs; threads = threads, blocks = blocks, shmem= Tx * Ty * cs * sizeof(Tuple{Int32, Int32}))
 end
 function kernel_neib_external_2d!(pairs, cnt, cellpnum, points, celllist,  offset, dist², cs)
-    indexᵢ = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
-    indexⱼ = (blockIdx().y - Int32(1)) * blockDim().y + threadIdx().y 
-    #scnt   = CuDynamicSharedArray(Int32, 1)
-    cache  = CuDynamicSharedArray(Tuple{Int32, Int32}, blockDim().x * blockDim().y * cs, 8)
-    #if threadIdx().x == 1 && threadIdx().y == 1 
-    #    scnt[1] = cnt[1]
-    #end
-    #sync_threads()
+    threadx = threadIdx().x
+    thready = threadIdx().y
+    indexᵢ = (blockIdx().x - Int32(1)) * blockDim().x + threadx
+    indexⱼ = (blockIdx().y - Int32(1)) * blockDim().y + thready
+    cache  = CuDynamicSharedArray(Tuple{Int32, Int32}, (cs, blockDim().x , blockDim().y))
     Nx, Ny = size(cellpnum)
     neibcellᵢ = indexᵢ + offset[1]
     neibcellⱼ = indexⱼ + offset[2]
     if 0 < neibcellᵢ <= Nx &&  0 < neibcellⱼ <= Ny && indexᵢ <= Nx && indexⱼ <= Ny && cellpnum[indexᵢ, indexⱼ] > 0 #&& cellpnum[neibcellᵢ, neibcellⱼ] > 0
-        lind  = indexᵢ + Ny * (indexⱼ - Int32(1))
         ccnt  = zero(Int32)
         iinds = view(celllist, 1:cellpnum[indexᵢ, indexⱼ], indexᵢ, indexⱼ)
         jinds = view(celllist, 1:cellpnum[neibcellᵢ, neibcellⱼ], neibcellᵢ, neibcellⱼ)
@@ -231,82 +230,87 @@ function kernel_neib_external_2d!(pairs, cnt, cellpnum, points, celllist,  offse
                 pⱼ = points[j]
                 distance = (pᵢ[1] - pⱼ[1])^2 + (pᵢ[2] - pⱼ[2])^2
                 if distance < dist²
-                    cache[lind + ccnt] = minmax(i, j)
+                    #n = CUDA.@atomic cnt[1] += 1
+                    #pairs[n + 1] = minmax(i, j)
+                    
                     ccnt += 1
+                    cache[ccnt, threadx, thready] = minmax(i, j)
                     if ccnt == cs
                         s  = CUDA.@atomic cnt[1] += ccnt
                         if s + ccnt <=length(pairs)
-                            for cind in 1:cs
-                                pairs[s+cind] = cache[lind + cind - 1]
+                            for cind in 1:ccnt
+                                pairs[s + cind] = cache[cind, threadx, thready]
                             end
                         end
                         ccnt = 0
-                    end
+                    end 
+
                 end
             end  
-        end
-        if ccnt != 0
-            s = CUDA.@atomic cnt[1] += ccnt
+        end   
+        if ccnt > 0 
+            s  = CUDA.@atomic cnt[1] += ccnt
             if s + ccnt <=length(pairs)
-                for cind in 1:ccnt 
-                    pairs[s + cind] = cache[lind + cind - 1]
+                for cind in 1:ccnt
+                    pairs[s + cind] = cache[cind, threadx, thready]
                 end
             end
         end
-    end
-    #sync_threads()
-    #if threadIdx().x == 1 && threadIdx().y == 1 
-    #    cnt[1] = scnt[1]
-    #end
-    return nothing
-end
-#####################################################################
-# Make neighbor matrix (list)
-#####################################################################
-#=
-function kernel_neiblist_2d!(nlist, ncnt, points,  celllist, cellpnum, pcell, dist, offset) 
-    index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
-    if index <= length(points)
-        # get point cell
-        cell   = pcell[index]
-        celli  = cell[1] + offset[1]
-        cellj  = cell[2] + offset[2]
-        if  0 < celli <= size(celllist, 2) && 0 < cellj <= size(celllist, 3)
-            snl    = size(nlist, 1)
-            clist  = view(celllist, :, celli, cellj)
-            celln  = cellpnum[celli, cellj]
-            distsq = dist * dist
-            cnt    = ncnt[index]
-            pointi = points[index]
-            pointj = points[indexj]
-            for i = 1:celln
-                indexj = clist[i]
-                if index != indexj && (pointi[1] - pointj[1])^2 + (pointi[2] - pointj[2])^2 < distsq
-                    cnt += 1
-                    if cnt <= snl
-                        nlist[cnt, index] = indexj
-                    end
-                end
-            end
-            ncnt[index] = cnt
-        end
+        
     end
     return nothing
 end
-"""
-    neiblist_2d!(nlist, ncnt, points,  celllist, cellpnum, pcell, dist, offset)
-
-"""
-function neiblist_2d!(nlist, ncnt, points,  celllist, cellpnum, pcell, dist, offset)
-    gpukernel = @cuda launch=false kernel_neiblist_2d!(nlist, ncnt, points,  celllist, cellpnum, pcell, dist, offset)
+#####################################################################
+# 
+#####################################################################
+function pranges!(ranges, pairs) 
+    gpukernel = @cuda launch=false kernel_pranges!(ranges, pairs) 
     config = launch_configuration(gpukernel.fun)
-    Nx = length(points)
+    Nx = length(ranges)
     maxThreads = config.threads
     Tx  = min(maxThreads, Nx)
-    Bx  = cld(Nx, Tx)
-    CUDA.@sync gpukernel(nlist, ncnt, points,  celllist, cellpnum, pcell, dist, offset; threads = Tx, blocks = Bx)
+    CUDA.@sync gpukernel(ranges, pairs; threads = Tx, blocks = 1, shmem = Tx * sizeof(Int))
 end
-=#
+function kernel_pranges!(ranges, pairs) 
+    index  = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
+    thread = threadIdx().x
+    stride = gridDim().x * blockDim().x
+    tn     = blockDim().x
+    cache  = CuDynamicSharedArray(Int, tn)
+    cache[thread] = 1
+    rs = 0
+    sync_threads()
+    while index <= length(ranges)
+        s = false
+        for i = cache[thread]:length(pairs)
+            fpi = first(pairs[i])
+            if fpi == index && !s
+                s  = true
+                rs = i
+            elseif fpi != index && s
+                ranges[index] = (rs, i - 1)
+                cache[thread] = i
+                break
+            elseif (!s && index < fpi) || fpi == 0
+                ranges[index] = (0, 0)
+                break
+            end
+        end
+        sync_threads()
+        if thread == 1
+            maxindex = 1
+            for i = 1:tn
+                if cache[i] > maxindex maxindex = cache[i] end
+            end
+            for i = 1:tn
+                cache[i] = maxindex
+            end
+        end
+        index += stride
+        sync_threads()
+    end
+    return nothing
+end
 #####################################################################
 #####################################################################
 # SPH
@@ -501,13 +505,35 @@ function kernel_∑∇W_2d!(∑∇W, pairs, points, kernel, H⁻¹)
 end
 
 #####################################################################
+# https://discourse.julialang.org/t/can-this-be-written-even-faster-cpu/109924/28
+@inline function powfancy7th(x, γ⁻¹, γ)
+    if γ == 7
+        # todo tune the magic constant
+        # initial guess based on fast inverse sqrt trick but adjusted to compute x^(1/7)
+        t = copysign(reinterpret(Float64, 0x36cd000000000000 + reinterpret(UInt64,abs(x))÷7), x)
+        @fastmath for _ in 1:2
+        # newton's method for t^3 - x/t^4 = 0
+            t2 = t*t
+            t3 = t2*t
+            t4 = t2*t2
+            xot4 = x/t4
+            t = t - t*(t3 - xot4)/(4*t3 + 3*xot4)
+        end
+        return t
+    end
+    return x^γ⁻¹
+end
 """
     
     ∂ρ∂tDDT!(∑∂ρ∂t,  ∇W, pairs, points, h, m₀, δᵩ, c₀, γ, g, ρ₀, ρ, v, ptype) 
 
 Compute ∂ρ∂t - density derivative includind density diffusion.
 
+```math
 
+\\frac{\\partial \\rho_i}{\\partial t} = \\sum  m_j \\textbf{v}_{ij} \\cdot \\nabla_i W_{ij} + \\delta_{\Phi} h c_0 \\sum \\Psi_{ij} \\cdot \\nabla_i W_{ij} \\frac{m_j}{\\rho_j}
+
+```
 
 """
 function ∂ρ∂tDDT!(∑∂ρ∂t,  ∇W, pairs, points, h, m₀, δᵩ, c₀, γ, g, ρ₀, ρ, v, ptype) 
@@ -570,7 +596,8 @@ function kernel_∂ρ∂tDDT!(∑∂ρ∂t,  ∇W, pairs, points, h, m₀, δᵩ
             ∑∂ρ∂ti = ∑∂ρ∂tj = m₀dot
 
             if ptype[pᵢ] >= 1
-                drhopvp = ρ₀ * (1 + DDTgz * Δx[2])^γ⁻¹ - ρ₀ ## << CHECK
+                drhopvp = ρ₀ * powfancy7th(1 + DDTgz * Δx[2], γ⁻¹, γ) - ρ₀ ## << CHECK
+                #drhopvp = ρ₀ * (1 + DDTgz * Δx[2])^γ⁻¹ - ρ₀ ## << CHECK
                 visc_densi = DDTkh * c₀ * (ρⱼ - ρᵢ - drhopvp) / (r² + η²)
                 delta_i    = visc_densi * dot3 * m₀ / ρⱼ
                 ∑∂ρ∂ti    += delta_i 
@@ -578,7 +605,8 @@ function kernel_∂ρ∂tDDT!(∑∂ρ∂t,  ∇W, pairs, points, h, m₀, δᵩ
             CUDA.@atomic ∑∂ρ∂t[pᵢ] += ∑∂ρ∂ti 
 
             if ptype[pⱼ] >= 1
-                drhopvn = ρ₀ * (1 - DDTgz * Δx[2])^γ⁻¹ - ρ₀
+                drhopvn = ρ₀ * powfancy7th(1 - DDTgz * Δx[2], γ⁻¹, γ) - ρ₀
+                #drhopvn = ρ₀ * (1 - DDTgz * Δx[2])^γ⁻¹ - ρ₀
                 visc_densi = DDTkh * c₀ * (ρᵢ - ρⱼ - drhopvn) / (r² + η²)
                 delta_j    = visc_densi * dot3 * m₀ / ρᵢ
                 ∑∂ρ∂tj    += delta_j 
@@ -605,6 +633,108 @@ function kernel_∂ρ∂tDDT!(∑∂ρ∂t,  ∇W, pairs, points, h, m₀, δᵩ
             
         end
         index += stride
+    end
+    return nothing
+end
+
+function ∂ρ∂tDDT2!(∑∂ρ∂t,  ∇W, pairs, points, ranges, h, m₀, δᵩ, c₀, γ, g, ρ₀, ρ, v, ptype) 
+    if length(pairs) != length(∇W) error("Length shoul be equal") end
+
+    gpukernel = @cuda launch=false kernel_∂ρ∂tDDT2!(∑∂ρ∂t,  ∇W, pairs, points, ranges, h, m₀, δᵩ, c₀, γ, g, ρ₀, ρ, v, ptype) 
+    config = launch_configuration(gpukernel.fun)
+    Nx = length(ranges)
+    maxThreads = config.threads
+    Tx  = min(maxThreads, Nx)
+    Bx  = cld(Nx, Tx)
+    CUDA.@sync gpukernel(∑∂ρ∂t, ∇W, pairs, points, ranges, h, m₀, δᵩ, c₀, γ, g, ρ₀, ρ, v, ptype; threads = Tx, blocks = Bx)
+end
+function kernel_∂ρ∂tDDT2!(∑∂ρ∂t,  ∇W, pairs, points, ranges, h, m₀, δᵩ, c₀, γ, g, ρ₀, ρ, v, ptype) 
+    tindex = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
+    stride = gridDim().x * blockDim().x
+    index      = tindex
+    # move it outside kernel
+    γ⁻¹  = 1/γ
+    η²   = (0.1*h)*(0.1*h)
+    Cb    = (c₀ * c₀ * ρ₀) * γ⁻¹
+    DDTgz = ρ₀ * g / Cb
+    DDTkh = 2 * h * δᵩ
+
+    while index <= length(ranges)
+        s, e = ranges[index]
+        for pind in s:e
+        pair  = pairs[index]
+        pᵢ    = pair[1]; pⱼ = pair[2]
+        if pᵢ > 0 # && !(isboundary[pᵢ] && isboundary[pᵢ]) 
+            xᵢ    = points[pᵢ]
+            xⱼ    = points[pⱼ]
+            Δx    = (xᵢ[1] - xⱼ[1], xᵢ[2] - xⱼ[2])
+            r²    = Δx[1]^2 + Δx[2]^2 
+            # for timestep Δt½ d != actual range
+            # one way - not calculate values out of 2h
+            # if r² > (2h)^2 return nothing end
+            #=
+            Cb = (c₀ * c₀ * ρ₀) * γ⁻¹
+            Pᴴ =  ρ₀ * g * z
+            ᵸᵀᴴ
+            =#
+            ρᵢ    = ρ[pᵢ]
+            ρⱼ    = ρ[pⱼ]
+
+            Δv    = (v[pᵢ][1] - v[pⱼ][1], v[pᵢ][2] - v[pⱼ][2])
+
+            ∇Wᵢⱼ  = ∇W[index]
+            #=
+            z  = Δx[2]
+            Cb = (c₀ * c₀ * ρ₀) * γ⁻¹
+            Pᴴ =  ρ₀ * g * z
+            ρᴴ =  ρ₀ * (((Pᴴ + 1)/Cb)^γ⁻¹ - 1)
+            ψ  = 2 * (ρᵢ - ρⱼ) * Δx / r²
+            =#
+            dot3  = -(Δx[1] * ∇Wᵢⱼ[1] + Δx[2] * ∇Wᵢⱼ[2]) #  - Δx ⋅ ∇Wᵢⱼ
+
+            # as actual range at timestep Δt½  may be greateg  - some problems can be here
+            if 1 + DDTgz * Δx[2] < 0 || 1 - DDTgz * Δx[2] < 0 return nothing end
+            
+            m₀dot     = m₀ * (Δv[1] * ∇Wᵢⱼ[1] + Δv[2] * ∇Wᵢⱼ[2])  #  Δv ⋅ ∇Wᵢⱼ
+            ∑∂ρ∂ti = ∑∂ρ∂tj = m₀dot
+
+            if ptype[pᵢ] >= 1
+                drhopvp = ρ₀ * powfancy7th(1 + DDTgz * Δx[2], γ⁻¹, γ) - ρ₀ ## << CHECK
+                visc_densi = DDTkh * c₀ * (ρⱼ - ρᵢ - drhopvp) / (r² + η²)
+                delta_i    = visc_densi * dot3 * m₀ / ρⱼ
+                ∑∂ρ∂ti    += delta_i 
+            end
+            CUDA.@atomic ∑∂ρ∂t[pᵢ] += ∑∂ρ∂ti 
+
+            if ptype[pⱼ] >= 1
+                drhopvn = ρ₀ * powfancy7th(1 - DDTgz * Δx[2], γ⁻¹, γ) - ρ₀
+                visc_densi = DDTkh * c₀ * (ρᵢ - ρⱼ - drhopvn) / (r² + η²)
+                delta_j    = visc_densi * dot3 * m₀ / ρᵢ
+                ∑∂ρ∂tj    += delta_j 
+            end
+            CUDA.@atomic ∑∂ρ∂t[pⱼ] += ∑∂ρ∂tj
+            
+            #=
+            if isnan(delta_j) || isnan(m₀dot)  || isnan(ρᵢ) || isnan(ρⱼ) 
+                @cuprintln "kernel_DDT 1 isnan dx1 = $(Δx[1]) , dx2 = $(Δx[2]) rhoi = $ρᵢ , dot3 = $dot3 , visc_densi = $visc_densi drhopvn = $drhopvn $(∇W[1]) $(Δv[1])"
+                error() 
+            end
+            if isinf(delta_j) || isinf(m₀dot)  || isinf(delta_i) 
+                @cuprintln "kernel_DDT 2 inf: dx1 = $(Δx[1]) , dx2 = $(Δx[2]) rhoi = $ρᵢ , rhoj = $ρⱼ , dot3 = $dot3 ,  delta_i = $delta_i , delta_j = $delta_j , drhopvn = $drhopvn , visc_densi = $visc_densi , $(∇W[1]) , $(Δv[1])"
+                error() 
+            end
+            =#
+            #mlfac = MotionLimiter[pᵢ] * MotionLimiter[pⱼ]
+            #=
+            if isnan(∑∂ρ∂tval1) || isnan(∑∂ρ∂tval2) || abs(∑∂ρ∂tval1) >  10000000 || abs(∑∂ρ∂tval2) >  10000000
+                @cuprintln "kernel DDT: drhodti = $∑∂ρ∂ti drhodtj = $∑∂ρ∂tj, dx1 = $(Δx[1]), dx2 = $(Δx[2]) rhoi = $ρᵢ, rhoj = $ρⱼ, dot3 = $dot3, visc_densi = $visc_densi, drhopvn = $drhopvn, dw = $(∇W[1]),  dv = $(Δv[1])"
+                error() 
+            end
+            =#
+            
+        end
+        index += stride
+        end
     end
     return nothing
 end

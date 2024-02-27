@@ -867,3 +867,162 @@ verts = empty(MeshCell{WriteVTK.PolyData.Verts,UnitRange{Int64}}[])
         test2!(CUDA.zeros(10)) 
 
         @benchmark minmax(34, 23)
+
+
+using CUDA
+
+        function test_2d!(cnt, mat)
+            gpukernel = @cuda launch=false kernel_test_2d!(cnt, mat, 6)
+            config = launch_configuration(gpukernel.fun)
+            maxThreads = config.threads
+            Nx = length(mat)
+            Tx  = min(maxThreads, Nx) 
+            Bx  = 1
+            cs = fld(attribute(device(), CUDA.DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN) - 8,  Tx * sizeof(Tuple{Int32, Int32}))
+            CUDA.@sync gpukernel(cnt, mat, cs; threads = Tx, blocks = Bx, shmem= Tx * cs * sizeof(Tuple{Int32, Int32}))
+        end
+        function kernel_test_2d!(cnt, mat, cs)
+            index  = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
+            stride = gridDim().x * blockDim().x
+            scnt   = CuStaticSharedArray(Int32, 1)
+     
+            if threadIdx().x == 1
+                scnt[1] = cnt[1] 
+            end
+            sync_threads()
+            Nx, Ny = size(mat)
+            while index <= length(mat)
+                y = cld(index, Nx)
+                x = index - Nx * (y - 1)
+                #@cuprintln "index $index ind $x, $y"
+
+                n = CUDA.@atomic scnt[1] += 1
+                mat[x,y] = n + 1
+                index += stride
+            end
+            sync_threads()
+            if threadIdx().x == 1
+                cnt[1] = scnt[1] 
+                CUDA.@cuprintln "Down $(cnt[1])  block $(blockIdx().x)"
+            end
+            return nothing
+        end
+        cnt = cu([0])
+        mat = CUDA.zeros(100, 100)
+        test_2d!(cnt, mat)
+
+
+
+        function pranges_test!(ranges, pairs) 
+            gpukernel = @cuda launch=false kernel_pranges_test!(ranges, pairs) 
+            config = launch_configuration(gpukernel.fun)
+            Nx = length(ranges)
+            maxThreads = config.threads
+            Tx  = min(maxThreads, Nx)
+            CUDA.@sync gpukernel(ranges, pairs; threads = 1, blocks = 1, shmem = Tx * sizeof(Int))
+        end
+        function kernel_pranges_test!(ranges, pairs, np) 
+            index  = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
+            thread = threadIdx().x
+            stride = gridDim().x * blockDim().x
+            tn     = blockDim().x
+            cache  = CuDynamicSharedArray(Int, tn)
+            cache[thread] = 1
+
+            si = (thread - 1) * np + 1
+            ei = min(length(pairs), thread * np)
+            sync_threads()
+            if thread != 1
+                s = first(pairs[si])
+                for i = si+1:length(pairs)
+                    if first(pairs[i]) != s
+                        si = i
+                        break
+                    end
+                end
+            end 
+      
+            sync_threads()            
+            for i = si:ei
+        
+            end
+        end
+
+
+        @benchmark  pranges_test!($pr, $system.pairs)
+
+
+        #=
+function neib_external_2d!(pairs, cnt, cellpnum, points, celllist, offset, dist)
+    dist² = dist^2
+    CLn, CLx, CLy = size(celllist)
+    Nx, Ny = size(cellpnum)
+    if (Nx, Ny) != (CLx, CLy) error("cell list dimension $((CLx, CLy)) not equal cellpnum $(size(cellpnum))...") end
+    gpukernel = @cuda launch=false kernel_neib_external_2d!(pairs, cnt, cellpnum, points, celllist,  offset, dist², 6)
+    config = launch_configuration(gpukernel.fun)
+    maxThreads = config.threads
+    Tx  = min(maxThreads, Nx) 
+    Bx  = 1 # Blocks in grid.
+    cs = fld(attribute(device(), CUDA.DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN),  Tx * sizeof(Tuple{Int32, Int32}))
+    CUDA.@sync gpukernel(pairs, cnt, cellpnum, points, celllist, offset, dist², cs; threads = Tx, blocks = Bx, shmem = Tx * cs * sizeof(Tuple{Int32, Int32}))
+end
+function kernel_neib_external_2d!(pairs, cnt, cellpnum, points, celllist,  offset, dist², cs)
+    index  = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
+    stride = gridDim().x * blockDim().x
+    Nx, Ny = size(cellpnum)
+    scnt   = CuStaticSharedArray(Int32, 1)
+    cache  = CuDynamicSharedArray(Tuple{Int32, Int32}, (cs, blockDim().x))
+
+    if threadIdx().x == 1
+        scnt[1] = cnt[1]
+    end
+    sync_threads()
+    Nx, Ny = size(cellpnum)
+    while index <= length(cellpnum)
+        indexⱼ    = cld(index, Nx)             # y
+        indexᵢ    = index - Nx * (indexⱼ - 1)  # x
+        neibcellᵢ = indexᵢ + offset[1]
+        neibcellⱼ = indexⱼ + offset[2]
+
+        if 0 < neibcellᵢ <= Nx &&  0 < neibcellⱼ <= Ny && indexᵢ <= Nx && indexⱼ <= Ny && cellpnum[indexᵢ, indexⱼ] > 0 #&& cellpnum[neibcellᵢ, neibcellⱼ] > 0
+            ccnt  = zero(Int32)
+            iinds = view(celllist, 1:cellpnum[indexᵢ, indexⱼ], indexᵢ, indexⱼ)
+            jinds = view(celllist, 1:cellpnum[neibcellᵢ, neibcellⱼ], neibcellᵢ, neibcellⱼ)
+            for i in iinds
+                pᵢ = points[i]
+                for j in jinds
+                    pⱼ = points[j]
+                    distance = (pᵢ[1] - pⱼ[1])^2 + (pᵢ[2] - pⱼ[2])^2
+                    if distance < dist²
+                        ccnt += 1
+                        cache[ccnt, threadIdx().x] = minmax(i, j)
+                        if ccnt == cs
+                            s  = CUDA.@atomic scnt[1] += ccnt
+                            if s + ccnt <=length(pairs)
+                                for cind in 1:ccnt
+                                    pairs[s + cind] = cache[cind, threadIdx().x]
+                                end
+                            end
+                            ccnt = 0
+                        end 
+                    end
+                end  
+            end        
+            if ccnt > 0 
+                s  = CUDA.@atomic scnt[1] += ccnt
+                if s + ccnt <=length(pairs)
+                    for cind in 1:ccnt
+                        pairs[s + cind] = cache[cind, threadIdx().x]
+                    end
+                end
+            end
+        end
+    index += stride
+    end
+    sync_threads()
+    if threadIdx().x == 1 
+        cnt[1] = scnt[1]
+    end
+    return nothing
+end
+=#

@@ -42,9 +42,11 @@ sphprob.dpc_l₀   = 0.01
 s                = 0.01
 stepsolve!(sphprob, 1)
 
-@profile  stepsolve!(sphprob, 10000)
+@benchmark stepsolve!(sphprob, 1000)
 
-@profile  timesolve!(sphprob; batch = 300, timeframe = 0.2)
+@profile  stepsolve!(sphprob, 100)
+
+@profile  timesolve!(sphprob; batch = 300, timeframe = 0.001)
 
 pprof()
 

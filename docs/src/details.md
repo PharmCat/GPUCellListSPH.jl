@@ -46,6 +46,13 @@ J. Monaghan, Smoothed Particle Hydrodynamics, “Annual Review of Astronomy and 
 
 ### Density diffusion term
 
+```math
+
+\frac{\partial \rho_i}{\partial t} = \sum  m_j \textbf{v}_{ij} \cdot \nabla_i W_{ij} + \delta_{\Phi} h c_0 \sum \Psi_{ij} \cdot \nabla_i W_{ij} \frac{m_j}{\rho_j}
+
+
+```
+
 
 ### XSPH correction
 

@@ -165,8 +165,8 @@ function _stepsolve!(prob::SPHProblem{T}, n::Int, ::StepByStep; timestepping = f
         else
             update!(prob.system)
             x           = prob.system.points
-            pairs       = neighborlist(prob.system)
-            sort!(pairs, by = first)
+            pairs       = neighborlistview(prob.system)
+            #sort!(pairs, by = first)
             for a in prob.cΔx fill!(a, zero(T)) end
             skipupdate  = true
             updaten += 1 

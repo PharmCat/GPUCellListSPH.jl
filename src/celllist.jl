@@ -100,7 +100,7 @@ end
 
 Full update cell grid.
 """
-@noinline function update!(c::GPUCellList)
+@noinline function update!(c::GPUCellList, fillzero::Bool = true)
     #cellmap_2d!(c.pcell, c.points, (c.cs[2], c.cs[2]), c.offset)
 
     fill!(c.cellpnum, zero(Int32))
@@ -126,7 +126,7 @@ Full update cell grid.
     if c.pairsn > length(c.pairs) || c.pairsn < length(c.pairs) * 0.6                       # if current number of pairs more than pair list or too small - then resize
         CUDA.unsafe_free!(c.pairs)
         c.pairs    = CUDA.fill((zero(Int32), zero(Int32)), Int(ceil(c.pairsn/0.8))) 
-    else
+    elseif fillzero
         fill!(c.pairs, (zero(Int32), zero(Int32)))
     end
 
@@ -153,13 +153,13 @@ Full update cell grid.
 end
 
 """
-    partialupdate!(c::GPUCellList)
+    partialupdate!(c::GPUCellList, fillzero::Bool = true)
 
 Update only distance 
 """
 @noinline function partialupdate!(c::GPUCellList)
     fill!(c.cnt, zero(Int32))
-    fill!(c.pairs, (zero(Int32), zero(Int32)))
+    if fillzero fill!(c.pairs, (zero(Int32), zero(Int32))) end
     neib_internal_2d!(c.pairs, c.cnt, c.cellpnum, c.points, c.celllist, c.dist)
     neib_external_2d!(c.pairs, c.cnt, c.cellpnum, c.points, c.celllist,  (1, -1), c.dist)
     neib_external_2d!(c.pairs, c.cnt, c.cellpnum, c.points, c.celllist,  (0,  1), c.dist)
@@ -176,6 +176,16 @@ List of pairs with distance.
 function neighborlist(c::GPUCellList)
     c.pairs
 end
+
+"""
+    neighborlistview(c::GPUCellList)
+
+List of pairs with distance.
+"""
+function neighborlistview(c::GPUCellList)
+    view(c.pairs, 1:c.pairsn)
+end
+
 
 
 function Base.show(io::IO, c::GPUCellList)
