@@ -35,14 +35,14 @@ sum(system.cellpnum) # total cell number
 
 maximum(system.cellpnum) # maximum particle in cell
 
-count(x-> !isnan(x[3]), system.pairs)  == system.pairsn
+count(x-> !iszero(x[1]), system.pairs)  == system.pairsn
 
 
 GPUCellListSPH.update!(system)
 
 GPUCellListSPH.partialupdate!(system)
 
-count(x-> !isnan(x[3]), system.pairs) == system.pairsn
+count(x-> !iszero(x[1]), system.pairs) == system.pairsn
 ```
 
 ## Benchmark
@@ -50,16 +50,16 @@ count(x-> !isnan(x[3]), system.pairs) == system.pairsn
 ```julia
 @benchmark GPUCellListSPH.update!($system)
 
-BenchmarkTools.Trial: 117 samples with 1 evaluation.
- Range (min … max):  42.519 ms …  43.666 ms  ┊ GC (min … max): 0.00% … 0.00%
- Time  (median):     42.998 ms               ┊ GC (median):    0.00%        
- Time  (mean ± σ):   42.987 ms ± 230.596 μs  ┊ GC (mean ± σ):  0.00% ± 0.00%
+BenchmarkTools.Trial: 116 samples with 1 evaluation.
+ Range (min … max):  41.310 ms … 47.129 ms  ┊ GC (min … max): 0.00% … 0.00%
+ Time  (median):     43.195 ms              ┊ GC (median):    0.00%        
+ Time  (mean ± σ):   43.373 ms ±  1.175 ms  ┊ GC (mean ± σ):  0.00% ± 0.00%
 
-             ▃     ▃▁  ▁ ▁   ▁ █ ▃▁▃  ▁
-  ▇▄▁▁▄▁▆▄▄▁▆█▄▁▆▇▇██▄▇█▆█▇▆▁█▇█▇███▇▆█▄▇▁▆▁▆▁▄▁▆▁▆▆▁▇▁▁▄▁▄▁▄▄ ▄
-  42.5 ms         Histogram: frequency by time         43.5 ms <
+        ▁  ▃  ▁ █▁▁ ▁▁▁▃     ▁  ▃        ▃
+  ▄▄▇▄▇▁█▄▁█▇▄█▁███▆████▆▇▆▆▆█▇▆█▄▄▄▆▇▁▄▇█▇▄▄▄▁▆▁▁▁▄▁▁▁▁▁▄▁▁▄ ▄
+  41.3 ms         Histogram: frequency by time        46.6 ms <
 
- Memory estimate: 40.72 KiB, allocs estimate: 722.
+ Memory estimate: 38.81 KiB, allocs estimate: 683.
 ```
 
 ```julia
@@ -81,14 +81,15 @@ BenchmarkTools.Trial: 118 samples with 1 evaluation.
 
 ```julia
 using GPUCellListSPH
-using CSV, DataFrames, CUDA, BenchmarkTools
+using CSV, DataFrames, CUDA, BenchmarkTools, SPHKernels
 
 path = joinpath(dirname(pathof(GPUCellListSPH)))
 
 fluid_csv    = joinpath(path, "../test/input/FluidPoints_Dp0.02.csv")
 boundary_csv = joinpath(path, "../test/input/BoundaryPoints_Dp0.02.csv")
 
-cpupoints, DF_FLUID, DF_BOUND    = GPUCellListSPH.loadparticles(fluid_csv, boundary_csv) # Load particles 
+DF_POINTS = append!(CSV.File(fluid_csv) |> DataFrame, CSV.File(boundary_csv) |> DataFrame)
+cpupoints = Tuple.(eachrow(DF_POINTS[!, ["Points:0", "Points:2"]])) # Load particles 
 
 dx  = 0.02                  # resolution
 h   = 1.2 * sqrt(2) * dx    # smoothinl length
@@ -108,22 +109,16 @@ CFL = 0.2                   # Courant–Friedrichs–Lewy condition for Δt step
 cellsize = (H, H)           # cell size
 sphkernel    = WendlandC2(Float64, 2) # SPH kernel from SPHKernels.jl
 
-system  = GPUCellList(cpupoints, cellsize, H)
+system  = GPUCellList(cpupoints, cellsize, dist)
 N       = length(cpupoints)
 ρ       = CUDA.zeros(Float64, N)
-copyto!(ρ, Array([DF_FLUID.Rhop;DF_BOUND.Rhop]))
+copyto!(ρ, DF_POINTS.Rhop)
+ptype   = CUDA.zeros(Int32, N)
+copyto!(ptype, DF_POINTS.ptype)
+v       = CUDA.fill((0.0, 0.0), length(cpupoints))
 
-ml        = CUDA.zeros(Float64, N)
-copyto!(ml, append!(ones(Float64, size(DF_FLUID, 1)), zeros(Float64, size(DF_BOUND, 1))))
+sphprob =  SPHProblem(system, h, H, sphkernel, ρ, v, ptype, ρ₀, m₀, Δt, α, g, c₀, γ, δᵩ, CFL)
 
-isboundary  = .!Bool.(ml)
-
-gf        = CUDA.zeros(Float64, N)
-copyto!(gf,[-ones(size(DF_FLUID,1)) ; ones(size(DF_BOUND,1))])
-
-v           = CUDA.fill((0.0, 0.0), length(cpupoints))
-
-sphprob =  SPHProblem(system, h, H, sphkernel, ρ, v, ml, gf, isboundary, ρ₀, m₀, Δt, α, g, c₀, γ, δᵩ, CFL)
 
 # batch - number of iteration until check time and vtp
 # timeframe - simulation time
