@@ -751,7 +751,7 @@ Compute ∂Π∂t - artificial viscosity. Add to `∑∂Π∂t`
 
 ```math
 
-\\Pi_{ij} = \\begin{cases} \\frac{- \\alpha \\overline{c}_{ij} \\mu_{ij} + \\beta \\mu_{ij}^2 }{\\overline{\rho}_{ij}} &  \\textbf{v}_{ij}\\cdot \\textbf{r}_{ij} < 0 \\\\ 0 &  otherwise \\end{cases}
+\\Pi_{ij} = \\begin{cases} \\frac{- \\alpha \\overline{c}_{ij} \\mu_{ij} + \\beta \\mu_{ij}^2 }{\\overline{\\rho}_{ij}} &  \\textbf{v}_{ij}\\cdot \\textbf{r}_{ij} < 0 \\\\ 0 &  otherwise \\end{cases}
 
 \\\\
 \\\\

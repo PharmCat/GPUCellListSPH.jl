@@ -157,7 +157,7 @@ end
 
 Update only distance 
 """
-@noinline function partialupdate!(c::GPUCellList)
+@noinline function partialupdate!(c::GPUCellList, fillzero::Bool = true)
     fill!(c.cnt, zero(Int32))
     if fillzero fill!(c.pairs, (zero(Int32), zero(Int32))) end
     neib_internal_2d!(c.pairs, c.cnt, c.cellpnum, c.points, c.celllist, c.dist)
