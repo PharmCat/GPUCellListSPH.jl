@@ -195,7 +195,7 @@ function _stepsolve!(prob::SPHProblem{T}, n::Int, ::StepByStep; timestepping = f
         # kernels gradientfor each pair
         ∇W_2d!(prob.∇W, pairs, x, prob.sphkernel, prob.H⁻¹)
         # density derivative with density diffusion
-        ∂ρ∂tDDT!(prob.∑∂ρ∂t, prob.∇W, pairs, x, prob.h, prob.m₀, prob.δᵩ, prob.c₀, prob.γ, prob.g, prob.ρ₀, prob.ρ, prob.v, prob.ptype) 
+        ∂ρ∂tDDT!(prob.∑∂ρ∂t, prob.∇W, pairs, x, prob.h, prob.m₀, prob.δᵩ, prob.c₀, prob.γ, prob.g, prob.ρ₀, prob.ρ, prob.v, prob.ptype; minthreads = 256) 
         # artificial viscosity
         ∂Π∂t!(prob.∑∂Π∂t, prob.∇W, pairs, x, prob.h, prob.ρ, prob.α, prob.v, prob.c₀, prob.m₀)
         #  pressure
@@ -230,7 +230,7 @@ function _stepsolve!(prob::SPHProblem{T}, n::Int, ::StepByStep; timestepping = f
         fill!(prob.∑Δvdpc[2], zero(T))
 
         # density derivative with density diffusion at  xΔt½ 
-        ∂ρ∂tDDT!(prob.∑∂ρ∂t,  prob.∇W, pairs, prob.xΔt½, prob.h, prob.m₀, prob.δᵩ, prob.c₀, prob.γ, prob.g, prob.ρ₀, prob.ρ, prob.v, prob.ptype) 
+        ∂ρ∂tDDT!(prob.∑∂ρ∂t,  prob.∇W, pairs, prob.xΔt½, prob.h, prob.m₀, prob.δᵩ, prob.c₀, prob.γ, prob.g, prob.ρ₀, prob.ρ, prob.v, prob.ptype; minthreads = 256) 
         # artificial viscosity at xΔt½ 
         ∂Π∂t!(prob.∑∂Π∂t, prob.∇W, pairs, prob.xΔt½, prob.h, prob.ρ, prob.α, prob.v, prob.c₀, prob.m₀)
         #  pressure

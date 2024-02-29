@@ -11,8 +11,8 @@ path         = dirname(@__FILE__)
 
     cpupoints, DF_FLUID, DF_BOUND    = GPUCellListSPH.loadparticles(fluid_csv, boundary_csv)
     dx  = 0.02
-    H   = 1.2 * sqrt(2) * dx
-    system = GPUCellListSPH.GPUCellList(cpupoints, (2H, 2H), 2H)
+    h   = 1.2 * sqrt(2) * dx
+    system = GPUCellListSPH.GPUCellList(cpupoints, (2h, 2h), 2h)
     GPUCellListSPH.update!(system)
 
 end

@@ -16,11 +16,11 @@ Particle indexes: ``i``, ``j``;
 
 ``m_0`` - reference mass;
 
-``\rho. \rho_i, \rho_j`` - dencity;
+``\rho, \rho_i, \rho_j`` - dencity;
 
 ``\rho_0`` - reference dencity;
 
-``p, p_i, p_j`` - pressure;
+``P, P_i, P_j`` - pressure;
 
 ``\Pi`` - artificial viscosity term;
 
@@ -38,18 +38,31 @@ Particle indexes: ``i``, ``j``;
 
 ``V_i = \frac{m_i}{\rho_i}; V_j = \frac{m_j}{\rho_j}``
 
+``z_{ij}`` -  vertical distance
 
 ### Constants
 
 ``g`` - gravity;
 
-``c₀`` - speed of sound;
+``c₀`` - speed of sound at the reference density;
+
+``c_0 = c(\rho_0) = \sqrt{\frac{\partial P}{\partial \rho}}``
 
 ``γ = 7`` - gamma costant (pressure equation of state);
 
 ``\delta_{\Phi}`` - coefficient for density diffusion;
 
 
+### Equation of State in Weakly-Compressible SPH
+
+```math
+P = c_0^2 \rho_0 * \left[  \left( \frac{\rho}{\rho_0} \right)^{\gamma}  \right]
+
+
+```
+
+* Monaghan et al., 1999
+* Batchelor, 1974
 
 ### Artificial Viscosity
 
@@ -105,6 +118,14 @@ J. Monaghan, Smoothed Particle Hydrodynamics, “Annual Review of Astronomy and 
 
 \Psi_{ij} = 2 (\rho_{ij}^T + \rho_{ij}^H) \frac{\textbf{r}_{ij}}{r_{ij}^2 + \eta^2}
 
+\\
+
+\rho_{ij}^H = \rho_0 \left( \sqrt[\gamma]{\frac{P_{ij}^H + 1}{C_b}} - 1\right)
+
+\\
+
+P_{ij}^H = \rho_0 g z_{ij}
+
 ```
 
 
@@ -152,6 +173,8 @@ k_{ij} =  \begin{cases} \chi_{ij} & 0.5 \le {r}_{ij}/l_0 < 1 \\ 1 & {r}_{ij}/l_0
 ```
 
 * Mojtaba Jandaghian, Herman Musumari Siaben, Ahmad Shakibaeinia, Stability and accuracy of the weakly compressible SPH with particle regularization techniques https://arxiv.org/pdf/2110.10076.pdf
+
+### Shifting algorithm
 
 
 ### Time stepping

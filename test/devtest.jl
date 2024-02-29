@@ -54,51 +54,9 @@ maxneigh = maximum(cellpnum)*9
 ncnt  = CUDA.zeros(Int32, N)  
 nlist = CUDA.zeros(Int32, maxneigh, N) 
 
-function kernel_neiblist_2d!(nlist, ncnt, points,  celllist, cellpnum, pcell, dist, offset) 
-    index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
-    if index <= length(points)
-        # get point cell
-        cell   = pcell[index]
-        celli  = cell[1] + offset[1]
-        cellj  = cell[2] + offset[2]
-        if  0 < celli <= size(celllist, 2) && 0 < cellj <= size(celllist, 3)
-            clist  = view(celllist, :, celli, cellj)
-            celln  = cellpnum[celli, cellj]
-            distsq = dist^2
-            cnt    = ncnt[index]
-            for i = 1:celln
-                indexj = clist[i]
-                if index != indexj && (points[index][1] - points[indexj][1])^2 + (points[index][2] - points[indexj][2])^2 < distsq
-                    cnt += 1
-                    if cnt <= size(nlist, 1)
-                        nlist[cnt, index] = indexj
-                    end
-                end
-            end
-            ncnt[index] = cnt
-        end
-    end
-    return nothing
-end
-"""
-    neiblist_2d!(nlist, ncnt, points,  celllist, cellpnum, pcell, dist, offset)
-
-"""
-function neiblist_2d!(nlist, ncnt, points,  celllist, cellpnum, pcell, dist, offset)
-    gpukernel = @cuda launch=false kernel_neiblist_2d!(nlist, ncnt, points,  celllist, cellpnum, pcell, dist, offset)
-    config = launch_configuration(gpukernel.fun)
-    Nx = length(points)
-    maxThreads = config.threads
-    Tx  = min(maxThreads, Nx)
-    Bx  = cld(Nx, Tx)
-    CUDA.@sync gpukernel(nlist, ncnt, points,  celllist, cellpnum, pcell, dist, offset; threads = Tx, blocks = Bx)
-end
-
 
 fill!(nlist, 0)
 fill!(ncnt, 0)
-
-
 
 
 neiblist_2d!(nlist, ncnt, points,  celllist, cellpnum, pcell, dist,  (0, 1))
@@ -171,93 +129,100 @@ GPUCellListSPH.partialupdate!(system2)
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 using GPUCellListSPH
 using CSV, DataFrames, CUDA, BenchmarkTools
-using SPHKernels
+using SPHKernels, WriteVTK
 path         = dirname(@__FILE__)
-fluid_csv    = joinpath(path, "./input/FluidPoints_Dp0.02.csv")
-boundary_csv = joinpath(path, "./input/BoundaryPoints_Dp0.02.csv")
+fluid_csv    = joinpath(path, "../test/input/FluidPoints_Dp0.02.csv")
+boundary_csv = joinpath(path, "../test/input/BoundaryPoints_Dp0.02.csv")
+DF_POINTS = append!(CSV.File(fluid_csv) |> DataFrame, CSV.File(boundary_csv) |> DataFrame)
+cpupoints = Tuple.(eachrow(DF_POINTS[!, ["Points:0", "Points:2"]]))
 
+dx  = 0.02
+h   = 1.2 * sqrt(2) * dx
+H   = 2h
+h⁻¹ = 1/h
+H⁻¹ = 1/H
+dist = 1.1H
+ρ₀  = 1000.0
+m₀  = ρ₀ * dx * dx
+α   = 0.01
+g   = 9.81
+c₀  = sqrt(g * 2) * 20
+γ   = 7
+Δt  = dt  = 1e-5
+δᵩ  = 0.1
+CFL = 0.2
+cellsize = (dist, dist)
+sphkernel    = WendlandC2(Float64, 2)
 
-    
-    cpupoints, DF_FLUID, DF_BOUND    = GPUCellListSPH.loadparticles(fluid_csv, boundary_csv)
+system  = GPUCellList(cpupoints, cellsize, dist)
+N       = length(cpupoints)
+ρ       = CUDA.zeros(Float64, N)
+copyto!(ρ, DF_POINTS.Rhop)
+ptype   = CUDA.zeros(Int32, N)
+copyto!(ptype, DF_POINTS.ptype)
+v       = CUDA.fill((0.0, 0.0), length(cpupoints))
 
-    ρ   = cu(Array([DF_FLUID.Rhop;DF_BOUND.Rhop]))
-    ρΔt½  = copy(ρ)
-    ml  = cu(append!(ones(Float64, size(DF_FLUID, 1)), zeros(Float64, size(DF_BOUND, 1))))
+system  =  GPUCellListSPH.GPUCellList(cpupoints, cellsize, H)
 
-    isboundary  = .!Bool.(ml)
-
-    gf = cu([-ones(size(DF_FLUID,1)) ; ones(size(DF_BOUND,1))])
-    v   = CUDA.fill((0.0, 0.0), length(cpupoints))
-    vΔt½  = copy(v)
-
-    a   = CUDA.zeros(Float64, length(cpupoints))
-
-    dx  = 0.02
-    h   = 1.2 * sqrt(2) * dx
-    H   = 2h
-    h⁻¹ = 1/h
-    H⁻¹ = 1/H
-    dist = H
-    ρ₀  = 1000
-    m₀  = ρ₀ * dx * dx #mᵢ  = mⱼ = m₀
-    α   = 0.01
-    g   = 9.81
-    c₀  = sqrt(g * 2) * 20
-    γ   = 7
-    Δt  = dt  = 1e-5
-    δᵩ  = 0.1
-    CFL = 0.2
-
-    cellsize = (H, H)
-    x = gpupoints = cu(cpupoints)
-    xΔt½ = copy(gpupoints)
-
-    N      = length(cpupoints)
-
-    sphkernel    = WendlandC2(Float64, 2)
-
-    system  =  GPUCellListSPH.GPUCellList(cpupoints, cellsize, H)
-    system2  = GPUCellListSPH.GPUNeighborCellList(cpupoints, cellsize, H)
+#system2  = GPUCellListSPH.GPUNeighborCellList(cpupoints, cellsize, H)
  
-    sumW    = CUDA.zeros(Float64, N)
+    ∑W    = CUDA.zeros(Float64, N)
     ∑∇W     = Tuple(CUDA.zeros(Float64, N) for n in 1:2)
-    ∇Wₙ     = CUDA.fill(zero(NTuple{2, Float64}), length(system.pairs))
+    ∇W     = CUDA.fill(zero(NTuple{2, Float64}), length(system.pairs))
     ∑∂ρ∂t   = CUDA.zeros(Float64, N)
-    ∑∂Π∂t   = CUDA.zeros(Float64, N, 2)
-    ∑∂v∂t   = CUDA.zeros(Float64, N, 2)
+
+    ∑∂Π∂t   = Tuple(CUDA.zeros(Float64, N) for n in 1:2)
+
+    ∑∂v∂t   = Tuple(CUDA.zeros(Float64, N) for n in 1:2)
 
     buf     = CUDA.zeros(Float64, N)
     etime = 0.0
 
     #∑∇W, ∇Wₙ, pairs, points, kernel, H⁻¹
 
-    GPUCellListSPH.∑∇W_2d!(∑∇W, ∇Wₙ , system.pairs,  system.points, sphkernel, H⁻¹)
+    GPUCellListSPH.∑∇W_2d!(∑∇W, ∇W, system.pairs,  system.points, sphkernel, H⁻¹)
 
-    GPUCellListSPH.∂ρ∂tDDT!(∑∂ρ∂t, ∇Wₙ, system.pairs, system.points, h, m₀, δᵩ, c₀, γ, g, ρ₀, ρ, v, isboundary) 
-    GPUCellListSPH.∂ρ∂tDDT_2!(∑∂ρ∂t, system2.nlist, system2.cnt, system2.points, sphkernel, h, H⁻¹, m₀, δᵩ, c₀, γ, g, ρ₀, ρ, v, isboundary) 
+    GPUCellListSPH.∂ρ∂tDDT!(∑∂ρ∂t, ∇W, system.pairs, system.points, h, m₀, δᵩ, c₀, γ, g, ρ₀, ρ, v, ptype) 
+    
+    GPUCellListSPH.∂Π∂t!(∑∂Π∂t, ∇W, system.pairs, system.points, h, ρ, α, v, c₀, m₀) 
 
-    @benchmark GPUCellListSPH.∂ρ∂tDDT!($∑∂ρ∂t, $∇Wₙ, $system.pairs, $system.points, $h, $m₀, $δᵩ, $c₀, $γ, $g, $ρ₀, $ρ, $v, $isboundary)
+
+    GPUCellListSPH.∂ρ∂tDDT_2!(∑∂ρ∂t, system2.nlist, system2.cnt, system2.points, sphkernel, h, H⁻¹, m₀, δᵩ, c₀, γ, g, ρ₀, ρ, v, ptype) 
+
+    @benchmark GPUCellListSPH.∂ρ∂tDDT!($∑∂ρ∂t, $∇W, $system.pairs, $system.points, $h, $m₀, $δᵩ, $c₀, $γ, $g, $ρ₀, $ρ, $v, $ptype; minthreads = 256)
+    # 256 - 136.300 / 148.200 / 171.975 μs ±  45.326 μs
+
+    @benchmark GPUCellListSPH.∂Π∂t!($∑∂Π∂t, $∇W, $system.pairs, $system.points, $h, $ρ, $α, $v, $c₀, $m₀; minthreads = 1024) 
 
     @benchmark GPUCellListSPH.∂ρ∂tDDT_2!($∑∂ρ∂t, $system2.nlist, $system2.cnt, $system2.points, $sphkernel, $h, $H⁻¹, $m₀, $δᵩ, $c₀, $γ, $g, $ρ₀, $ρ, $v, $isboundary) 
 
 #== ==#
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 function sph_simulation(system, sphkernel, ρ, ρΔt½, v, vΔt½, xΔt½, ∑∂Π∂t, ∑∂ρ∂t, ∑∂v∂t, sumW, sum∇W, ∇Wₙ, Δt, ρ₀, isboundary, ml, h, H⁻¹, m₀, δᵩ, c₀, γ, g, α; simn = 1)
 
     for iter = 1:simn
@@ -633,188 +598,8 @@ end
 kernel_∂ρ∂tDDT_test!(∑∂ρ∂t,  ∇Wₙ, pairs, points, h, m₀, δᵩ, c₀, γ, g, ρ₀, ρ, v, MotionLimiter) 
 =#
 
-mx = zeros(Float64, length(x), 2)
-for (i, r) in enumerate(eachrow(mx))
-    r .= x[i]
-end
 
-using ProgressMeter
-
-
-prog =  Progress(15.75)
-val = 0.0
-    for i = 1:150
-        val += 0.1
-        update!(prog, val)
-        sleep(0.01)
-    end
-
-
-prog = ProgressThresh(1e-5; desc="Minimizing:")
-for val in exp10.(range(2, stop=-6, length=20))
-    update!(prog, val)
-    sleep(0.1)
-end
-
-prog = ProgressUnknown(desc="Burning the midnight oil:", spinner=true)
-while true
-    next!(prog, spinner="🌑🌒🌓🌔🌕🌖🌗🌘")
-    rand(1:10^8) == 0xB00 && break
-end
-finish!(prog)
-
-
-
-
-
-minimum(sphprob.∑W)
-minimum(x->x[1], sphprob.∑∇W)
-minimum(x->x[1], sphprob.∇Wₙ)
-
-minimum(sphprob.∑∂ρ∂t)
-minimum(sphprob.∑∂Π∂t)
-minimum(sphprob.∑∂v∂t)
-
-
-minimum(sphprob.ρ)
-minimum(sphprob.ρΔt½)
-
-
-minimum(x->x[1], sphprob.v)
-minimum(x->x[1], sphprob.vΔt½)
-
-
-minimum(x->x[2], sphprob.system.points)
-maximum(x->x[2], sphprob.system.points)
-minimum(x->x[2], sphprob.xΔt½)
-
-
-findall(isnan, sphprob.ρ)
-
-sphprob.v[35]
-sphprob.system.points[35]
-sphprob.∑W[35]
-sphprob.∑∇W[35]
-
-p = neighborlist(prob.system)
-
-GPUCellListSPH.∂ρ∂tDDT!(prob.∑∂ρ∂t,  prob.∇Wₙ, p, prob.xΔt½, prob.h, prob.m₀, prob.δᵩ, prob.c₀, prob.γ, prob.g, prob.ρ₀, prob.ρ, prob.v, prob.ml)
-
-prob.∑∂ρ∂t[4197]
-
-prob.∇Wₙ[4197]
-
-prob.xΔt½[4197]
-
-prob.ρ[4197]
-
-prob.v[4197]
-
-kernel_∂ρ∂tDDT!(prob.∑∂ρ∂t,  prob.∇Wₙ, p, prob.xΔt½, prob.h, prob.m₀, prob.δᵩ, prob.c₀, prob.γ, prob.g, prob.ρ₀, prob.ρ, prob.v, prob.ml) 
-
-function kernel_∂ρ∂tDDT!(∑∂ρ∂t,  ∇Wₙ, pairs, points, h, m₀, δᵩ, c₀, γ, g, ρ₀, ρ, v, MotionLimiter) 
-
-    for index = 1:length(pairs)
-        pair  = pairs[index]
-        pᵢ    = pair[1]; pⱼ = pair[2]; d = pair[3]
-        if !isnan(d)
-            γ⁻¹  = 1/γ
-            η²   = (0.1*h)*(0.1*h)
-            Cb    = (c₀ * c₀ * ρ₀) * γ⁻¹
-            DDTgz = ρ₀ * g / Cb
-            DDTkh = 2 * h * δᵩ
-
-            #=
-            Cb = (c₀ * c₀ * ρ₀) * γ⁻¹
-            Pᴴ =  ρ₀ * g * z
-            ᵸᵀᴴ
-            =#
-            xᵢ    = points[pᵢ]
-            xⱼ    = points[pⱼ]
-            ρᵢ    = ρ[pᵢ]
-            ρⱼ    = ρ[pⱼ]
-
-            Δx    = (xᵢ[1] - xⱼ[1], xᵢ[2] - xⱼ[2])
-            Δv    = (v[pᵢ][1] - v[pⱼ][1], v[pᵢ][2] - v[pⱼ][2])
-
-            ∇Wᵢ   = ∇Wₙ[index]
-
-            #  Δx ⋅ Δx 
-            r²    = Δx[1]^2 + Δx[2]^2 
-            #=
-            z  = Δx[2]
-            Cb = (c₀ * c₀ * ρ₀) * γ⁻¹
-            Pᴴ =  ρ₀ * g * z
-            ρᴴ =  ρ₀ * (((Pᴴ + 1)/Cb)^γ⁻¹ - 1)
-            ψ  = 2 * (ρᵢ - ρⱼ) * Δx / r²
-            =#
-            
-            dot3  = -(Δx[1] * ∇Wᵢ[1] + Δx[2] * ∇Wᵢ[2]) #  - Δx ⋅ ∇Wᵢ 
-          
-            if 1 + DDTgz * Δx[2] < 0 error("!!! $index  $pᵢ   $pⱼ  $Δx $Δv  $∇Wᵢ $r² $dot3" ) end
-            drhopvp = ρ₀ * (1 + DDTgz * Δx[2])^γ⁻¹ - ρ₀ ## << CHECK
-            
-            
-            
-            visc_densi = DDTkh * c₀ * (ρⱼ - ρᵢ - drhopvp) / (r² + η²)
-            delta_i    = visc_densi * dot3 * m₀ / ρⱼ
-
-            drhopvn = ρ₀ * (1 - DDTgz * Δx[2])^γ⁻¹ - ρ₀
-            visc_densi = DDTkh * c₀ * (ρᵢ - ρⱼ - drhopvn) / (r² + η²)
-            delta_j    = visc_densi * dot3 * m₀ / ρᵢ
-
-            m₀dot     = m₀ * (Δv[1] * ∇Wᵢ[1] + Δv[2] * ∇Wᵢ[2])  #  Δv ⋅ ∇Wᵢ
-
-            ∑∂ρ∂t = (m₀dot + delta_i * MotionLimiter[pᵢ])
-            if isnan(∑∂ρ∂t) error("!!! $index  $pᵢ   $pⱼ  $Δx $Δv  $∇Wᵢ $r² $dot3 $drhopvp $visc_densi $delta_i" ) end
-            #CUDA.@atomic ∑∂ρ∂t[pⱼ] += (m₀dot + delta_j * MotionLimiter[pⱼ])
-            
-        end
-    end
-    return nothing
-end
-
-using Plots
-
-anim = Animation();
-
-p = plot([sin, cos], zeros(0), leg = false, xlims = (0, 2π), ylims = (-1, 1));
-
-
-frame(anim)
-
-display(p)
-
-
-expdict    = Dict()
-cpupoints               = Array(get_points(sphprob))
-coordsarr               = [map(x -> x[i], cpupoints) for i in 1:length(first(cpupoints))]
-expdict["Density"]      = Array(get_density(sphprob))
-expdict["Pressure"]     = Array(get_pressure(sphprob))
-expdict["Acceleration"] = permutedims(Array(get_acceleration(sphprob)))
-expdict["Velocity"]     = permutedims(hcat([map(x -> x[i],   Array(get_velocity(sphprob))) for i in 1:length(first(  get_velocity(sphprob)))]...))
-polys = empty(MeshCell{WriteVTK.PolyData.Polys,UnitRange{Int64}}[])
-verts = empty(MeshCell{WriteVTK.PolyData.Verts,UnitRange{Int64}}[])
-
-        vtk_grid("D:/vtk/tttest", coordsarr..., polys, verts, compress = true, append = false) do vtk
-            for (k, v) in expdict
-                vtk[k] = v
-            end
-
-        end
-
-
-
-
-
-
-
-
-
-
-
-
-
+#=
         using CUDA
 
         function test!(x) 
@@ -951,78 +736,45 @@ using CUDA
 
         @benchmark  pranges_test!($pr, $system.pairs)
 
-
-        #=
-function neib_external_2d!(pairs, cnt, cellpnum, points, celllist, offset, dist)
-    dist² = dist^2
-    CLn, CLx, CLy = size(celllist)
-    Nx, Ny = size(cellpnum)
-    if (Nx, Ny) != (CLx, CLy) error("cell list dimension $((CLx, CLy)) not equal cellpnum $(size(cellpnum))...") end
-    gpukernel = @cuda launch=false kernel_neib_external_2d!(pairs, cnt, cellpnum, points, celllist,  offset, dist², 6)
-    config = launch_configuration(gpukernel.fun)
-    maxThreads = config.threads
-    Tx  = min(maxThreads, Nx) 
-    Bx  = 1 # Blocks in grid.
-    cs = fld(attribute(device(), CUDA.DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN),  Tx * sizeof(Tuple{Int32, Int32}))
-    CUDA.@sync gpukernel(pairs, cnt, cellpnum, points, celllist, offset, dist², cs; threads = Tx, blocks = Bx, shmem = Tx * cs * sizeof(Tuple{Int32, Int32}))
-end
-function kernel_neib_external_2d!(pairs, cnt, cellpnum, points, celllist,  offset, dist², cs)
-    index  = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
-    stride = gridDim().x * blockDim().x
-    Nx, Ny = size(cellpnum)
-    scnt   = CuStaticSharedArray(Int32, 1)
-    cache  = CuDynamicSharedArray(Tuple{Int32, Int32}, (cs, blockDim().x))
-
-    if threadIdx().x == 1
-        scnt[1] = cnt[1]
-    end
-    sync_threads()
-    Nx, Ny = size(cellpnum)
-    while index <= length(cellpnum)
-        indexⱼ    = cld(index, Nx)             # y
-        indexᵢ    = index - Nx * (indexⱼ - 1)  # x
-        neibcellᵢ = indexᵢ + offset[1]
-        neibcellⱼ = indexⱼ + offset[2]
-
-        if 0 < neibcellᵢ <= Nx &&  0 < neibcellⱼ <= Ny && indexᵢ <= Nx && indexⱼ <= Ny && cellpnum[indexᵢ, indexⱼ] > 0 #&& cellpnum[neibcellᵢ, neibcellⱼ] > 0
-            ccnt  = zero(Int32)
-            iinds = view(celllist, 1:cellpnum[indexᵢ, indexⱼ], indexᵢ, indexⱼ)
-            jinds = view(celllist, 1:cellpnum[neibcellᵢ, neibcellⱼ], neibcellᵢ, neibcellⱼ)
-            for i in iinds
-                pᵢ = points[i]
-                for j in jinds
-                    pⱼ = points[j]
-                    distance = (pᵢ[1] - pⱼ[1])^2 + (pᵢ[2] - pⱼ[2])^2
-                    if distance < dist²
-                        ccnt += 1
-                        cache[ccnt, threadIdx().x] = minmax(i, j)
-                        if ccnt == cs
-                            s  = CUDA.@atomic scnt[1] += ccnt
-                            if s + ccnt <=length(pairs)
-                                for cind in 1:ccnt
-                                    pairs[s + cind] = cache[cind, threadIdx().x]
-                                end
-                            end
-                            ccnt = 0
-                        end 
-                    end
-                end  
-            end        
-            if ccnt > 0 
-                s  = CUDA.@atomic scnt[1] += ccnt
-                if s + ccnt <=length(pairs)
-                    for cind in 1:ccnt
-                        pairs[s + cind] = cache[cind, threadIdx().x]
+=#
+#=
+function kernel_neiblist_2d!(nlist, ncnt, points,  celllist, cellpnum, pcell, dist, offset) 
+    index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
+    if index <= length(points)
+        # get point cell
+        cell   = pcell[index]
+        celli  = cell[1] + offset[1]
+        cellj  = cell[2] + offset[2]
+        if  0 < celli <= size(celllist, 2) && 0 < cellj <= size(celllist, 3)
+            clist  = view(celllist, :, celli, cellj)
+            celln  = cellpnum[celli, cellj]
+            distsq = dist^2
+            cnt    = ncnt[index]
+            for i = 1:celln
+                indexj = clist[i]
+                if index != indexj && (points[index][1] - points[indexj][1])^2 + (points[index][2] - points[indexj][2])^2 < distsq
+                    cnt += 1
+                    if cnt <= size(nlist, 1)
+                        nlist[cnt, index] = indexj
                     end
                 end
             end
+            ncnt[index] = cnt
         end
-    index += stride
-    end
-    sync_threads()
-    if threadIdx().x == 1 
-        cnt[1] = scnt[1]
     end
     return nothing
+end
+"""
+    neiblist_2d!(nlist, ncnt, points,  celllist, cellpnum, pcell, dist, offset)
+
+"""
+function neiblist_2d!(nlist, ncnt, points,  celllist, cellpnum, pcell, dist, offset)
+    gpukernel = @cuda launch=false kernel_neiblist_2d!(nlist, ncnt, points,  celllist, cellpnum, pcell, dist, offset)
+    config = launch_configuration(gpukernel.fun)
+    Nx = length(points)
+    maxThreads = config.threads
+    Tx  = min(maxThreads, Nx)
+    Bx  = cld(Nx, Tx)
+    CUDA.@sync gpukernel(nlist, ncnt, points,  celllist, cellpnum, pcell, dist, offset; threads = Tx, blocks = Bx)
 end
 =#

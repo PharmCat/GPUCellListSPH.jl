@@ -6,7 +6,7 @@ using CUDA, SPHKernels, CSV, DataFrames, WriteVTK, ProgressMeter, StaticArrays, 
 
 import Plots: Animation
 
-export GPUCellList, update!, partialupdate!, neighborlist
+export GPUCellList, update!, partialupdate!, neighborlist, neighborlistview
 
 export makedf, writecsv
 
