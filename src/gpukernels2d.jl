@@ -558,7 +558,8 @@ P_{ij}^H = \\rho_0 g z_{ij}
 ``z_{ij}`` - vertical distance.
 
 """
-function ∂ρ∂tDDT!(∑∂ρ∂t,  ∇W, pairs, points, h, m₀, δᵩ, c₀, γ, g, ρ₀, ρ, v, ptype; minthreads::Int = 1024) 
+function ∂ρ∂tDDT!(∑∂ρ∂t::CuArray{T},  ∇W, pairs, points, h, m₀, δᵩ, c₀, γ, g, ρ₀, ρ, v, ptype; minthreads::Int = 1024)  where T
+    fill!(∑∂ρ∂t, zero(T))
     η²    = (0.1*h)*(0.1*h)
     γ⁻¹   = 1/γ
     DDTkh = 2 * h * δᵩ * c₀
@@ -815,6 +816,7 @@ J. Monaghan, Smoothed Particle Hydrodynamics, “Annual Review of Astronomy and 
 
 """
 function ∂Π∂t!(∑∂Π∂t, ∇W, pairs, points, h, ρ, α, v, c₀, m₀, ptype; minthreads::Int = 1024) 
+    
     η²    = (0.1 * h) * (0.1 * h)
     gpukernel = @cuda launch=false kernel_∂Π∂t!(∑∂Π∂t, ∇W, pairs, points, h, η², ρ, α, v, c₀, m₀, ptype) 
     config = launch_configuration(gpukernel.fun)
@@ -1264,22 +1266,22 @@ function kernel_∂v∂tpF!(∑∂v∂t, pairs, points, s, h, m₀, ptype)
     if index <= length(pairs)
         pair  = pairs[index]
         pᵢ    = pair[1]; pⱼ = pair[2]
-        if pᵢ != 0
-            if ptype[pᵢ] >= 1 && ptype[pⱼ] >= 1
-                xᵢ    = points[pᵢ]
-                xⱼ    = points[pⱼ]
-                Δx    = (xᵢ[1] - xⱼ[1], xᵢ[2] - xⱼ[2])
-                r     = sqrt(Δx[1]^2 + Δx[2]^2) 
-                if r < 2h
-                    scos = s * cos(1.5π * r / 2h)/ (r + (0.1*h))
-                    ∑∂v∂tˣ = ∑∂v∂t[1]
-                    ∑∂v∂tʸ = ∑∂v∂t[2] 
-                    CUDA.@atomic ∑∂v∂tˣ[pᵢ] +=  scos * Δx[1] / m₀
-                    CUDA.@atomic ∑∂v∂tʸ[pᵢ] +=  scos * Δx[2] / m₀
-                    CUDA.@atomic ∑∂v∂tˣ[pⱼ] -=  scos * Δx[1] / m₀
-                    CUDA.@atomic ∑∂v∂tʸ[pⱼ] -=  scos * Δx[2] / m₀
-                end
+        if pᵢ != 0 && ptype[pᵢ] >= 0 && ptype[pⱼ] >= 0
+           
+            xᵢ    = points[pᵢ]
+            xⱼ    = points[pⱼ]
+            Δx    = (xᵢ[1] - xⱼ[1], xᵢ[2] - xⱼ[2])
+            r     = sqrt(Δx[1]^2 + Δx[2]^2) 
+            if r < 2h
+                scos = s * cos(1.5π * r / 2h)/ (r + (0.1*h))
+                ∑∂v∂tˣ = ∑∂v∂t[1]
+                ∑∂v∂tʸ = ∑∂v∂t[2] 
+                CUDA.@atomic ∑∂v∂tˣ[pᵢ] +=  scos * Δx[1] / m₀
+                CUDA.@atomic ∑∂v∂tʸ[pᵢ] +=  scos * Δx[2] / m₀
+                CUDA.@atomic ∑∂v∂tˣ[pⱼ] -=  scos * Δx[1] / m₀
+                CUDA.@atomic ∑∂v∂tʸ[pⱼ] -=  scos * Δx[2] / m₀
             end
+
         end
     end
     return nothing
@@ -1325,7 +1327,9 @@ k_{ij} =  \\begin{cases} \\chi_{ij} & 0.5 \\le {r}_{ij}/l_0 < 1 \\\\ 1 & {r}_{ij
 Mojtaba Jandaghian, Herman Musumari Siaben, Ahmad Shakibaeinia, Stability and accuracy of the weakly compressible SPH with particle regularization techniques https://arxiv.org/pdf/2110.10076.pdf
 
 """
-function dpcreg!(∑Δvdpc, v, ρ, P, pairs, points, sphkernel, l₀, Pmin, Pmax, Δt, λ, dpckernlim)
+function dpcreg!(∑Δvdpc, v, ρ::CuArray{T}, P::CuArray{T}, pairs, points, sphkernel, l₀, Pmin, Pmax, Δt, λ, dpckernlim) where T
+    fill!(∑Δvdpc[1], zero(T))
+    fill!(∑Δvdpc[2], zero(T))
     l₀⁻¹     = 1 / l₀  
     wh⁻¹     = 1 / 𝒲(sphkernel, 0.5, l₀⁻¹)
     gpukernel = @cuda launch=false kernel_dpcreg!(∑Δvdpc, v, ρ, P, pairs, points, sphkernel, wh⁻¹, l₀, l₀⁻¹, Pmin, Pmax, Δt, λ, dpckernlim) 
@@ -1434,41 +1438,57 @@ end
 
 Corrected Smoothed Particle Method (CSPM) Density Renormalisation.
 
+```math
+
+\\rho_{i}^{norm} = \\frac{\\sum m_j W}{\\sum \\frac{m_j}{\\rho_j} W}
+```
+
 Chen JK, Beraun JE, Carney TC (1999) A corrective smoothed particle method for boundary value problems in heat conduction. Int. J. Num. Meth. Engng. https://doi.org/10.1002/(SICI)1097-0207(19990920)46:2<231::AID-NME672>3.0.CO;2-K
 """
-function cspmcorr!(∑ρcspm1, ∑ρcspm2, ρ, m₀, pairs, points, sphkernel, H⁻¹)
-    gpukernel = @cuda launch=false kernel_cspmcorr!(∑ρcspm1, ∑ρcspm2, ρ, m₀, pairs, points, sphkernel, H⁻¹) 
+function cspmcorr!(∑ρcspm, W, ρ::CuArray{T}, m₀, pairs, ptype) where T
+    fill!(∑ρcspm[1], zero(T))
+    fill!(∑ρcspm[2], zero(T))
+
+    gpukernel = @cuda launch=false kernel_cspmcorr_1!(∑ρcspm, W, ρ, m₀, pairs, ptype) 
     config = launch_configuration(gpukernel.fun)
     Nx = length(pairs)
     maxThreads = config.threads
     Tx  = min(maxThreads, Nx)
     Bx = cld(Nx, Tx)
-    CUDA.@sync gpukernel(∑ρcspm1, ∑ρcspm2, ρ, m₀, pairs, points, sphkernel, H⁻¹; threads = Tx, blocks = Bx)
+    CUDA.@sync gpukernel(∑ρcspm, W, ρ, m₀, pairs, ptype; threads = Tx, blocks = Bx)
+
+    gpukernel2 = @cuda launch=false kernel_cspmcorr_2!(ρ, ∑ρcspm) 
+    config = launch_configuration(gpukernel.fun)
+    Nx = length(ρ)
+    maxThreads = config.threads
+    Tx  = min(maxThreads, Nx)
+    Bx = cld(Nx, Tx)
+    CUDA.@sync gpukernel2(ρ, ∑ρcspm; threads = Tx, blocks = Bx)
 end
-function kernel_cspmcorr!(∑ρcspm1, ∑ρcspm2, ρ, m₀, pairs, points, sphkernel, H⁻¹) 
+function kernel_cspmcorr_1!(∑ρcspm, W, ρ, m₀, pairs, ptype) 
     index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
 
     if index <= length(pairs)
         pair  = pairs[index]
         pᵢ    = pair[1]; pⱼ = pair[2]
-        if pᵢ != 0
-            η²    = (0.1 * l₀) * (0.1 * l₀)
-            xᵢ    = points[pᵢ]
-            xⱼ    = points[pⱼ]
+        if pᵢ != 0 && ptype[pᵢ] >= 0 && ptype[pⱼ] >= 0
             ρᵢ    = ρ[pᵢ]
             ρⱼ    = ρ[pⱼ]
-            Δx    = (xᵢ[1] - xⱼ[1], xᵢ[2] - xⱼ[2])
-            r²    = Δx[1]^2 + Δx[2]^2 
-            r     = sqrt(r²) 
-            u     = r * H⁻¹
-            w     = 𝒲(sphkernel, u, H⁻¹)
+            w     = W[index]
+            CUDA.@atomic ∑ρcspm[1][pᵢ] +=  m₀ * w
+            CUDA.@atomic ∑ρcspm[2][pᵢ] +=  w * m₀ / ρⱼ
 
-            CUDA.@atomic ∑ρcspm1[pᵢ] +=  m₀ * w
-            CUDA.@atomic ∑ρcspm2[pᵢ] +=  w * m₀ / ρⱼ
-
-            CUDA.@atomic ∑ρcspm1[pⱼ] +=  m₀ * w
-            CUDA.@atomic ∑ρcspm2[pⱼ] +=  w * m₀ / ρᵢ
+            CUDA.@atomic ∑ρcspm[1][pⱼ] +=  m₀ * w
+            CUDA.@atomic ∑ρcspm[2][pⱼ] +=  w * m₀ / ρᵢ
         end
+    end
+    return nothing
+end
+function kernel_cspmcorr_2!(ρ, ∑ρcspm) 
+    index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
+    if index <= length(ρ) 
+        newρ = ∑ρcspm[1][index] / ∑ρcspm[2][index]
+        if !isnan(newρ) ρ[index] = newρ end
     end
     return nothing
 end

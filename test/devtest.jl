@@ -200,6 +200,11 @@ system  =  GPUCellListSPH.GPUCellList(cpupoints, cellsize, H)
 
 #== ==#
 
+prob= sphprob
+
+ρ = copy(prob.ρ)
+GPUCellListSPH.cspmcorr!(prob.buf2, prob.W, ρ , prob.m₀, view(prob.system.pairs, 1:prob.system.pairsn), prob.ptype)
+
 
 
 

@@ -48,6 +48,8 @@ sphprob =  SPHProblem(system, dx, h, H, sphkernel, ρ, v, ptype, ρ₀, m₀, Δ
 sphprob.dpc_l₀   = 0.005
 sphprob.dpc_λ    = 0.005
 sphprob.dpc_pmax = 36000
-timesolve!(sphprob; batch = 100, timeframe = 5.0, writetime = 0.025, path = "D:/vtk/", pvc = true, anim = true)
+sphprob.s        = 0.05
+timesolve!(sphprob; batch = 100, timeframe = 10.0, writetime = 0.025, path = "D:/vtk/", pvc = true, anim = true, 
+plotsettings = Dict(:leg => false, :xlims => (0, 4), :ylims => (0, 3.5)))
 
 #makedf(sphprob)

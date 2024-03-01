@@ -60,6 +60,7 @@ mutable struct SPHProblem{T}
     δᵩ::T                                 # Coefficient for density diffusion, typically 0.1
     CFL::T                                # CFL number for the simulation 
     buf::CuArray                                # buffer for dt calculation
+    buf2                                # buffer 
     etime::T                              # simulation time
     cΔx                                         # cumulative location changes in batch
     nui::T                                # non update interval, update if maximum(maximum.(abs, prob.cΔx)) > 0.9 * prob.nui  
@@ -86,6 +87,8 @@ mutable struct SPHProblem{T}
         ∑Δvdpc = Tuple(CUDA.zeros(T, N) for n in 1:dim)
 
         buf     = CUDA.zeros(T, N)
+
+        buf2    = Tuple(CUDA.zeros(T, N) for n in 1:dim)
 
         ρΔt½    = CUDA.deepcopy(ρ)
         vΔt½    = CUDA.deepcopy(v)
@@ -125,7 +128,8 @@ mutable struct SPHProblem{T}
         s, 
         δᵩ, 
         CFL, 
-        buf, 
+        buf,
+        buf2,
         0.0, 
         cΔx, 
         system.dist - H, 
@@ -158,10 +162,11 @@ function _stepsolve!(prob::SPHProblem{T}, n::Int, ::StepByStep; timestepping = f
     skipupdaten    = 0
     maxcΔx         = 0.0
     maxcΔxout      = 0.0
-
+    cspmcorrn      = 0
     dpckernlim = find_zero(x-> 1.0 - 𝒲(prob.sphkernel, x, 1.0), 0.5)
 
     for iter = 1:n
+        cspmcorrn       += 1
         if skipupdate 
             skipupdaten += 1
         else
@@ -175,7 +180,6 @@ function _stepsolve!(prob::SPHProblem{T}, n::Int, ::StepByStep; timestepping = f
         end
 
 
-        fill!(prob.∑∂ρ∂t, zero(T))
 
         fill!(prob.∑∂Π∂t[1], zero(T))
         fill!(prob.∑∂v∂t[1], zero(T))
@@ -223,15 +227,14 @@ function _stepsolve!(prob::SPHProblem{T}, n::Int, ::StepByStep; timestepping = f
 
         # set derivative to zero for Δt½ calc
 
-        fill!(prob.∑∂ρ∂t, zero(T))
+        
 
         fill!(prob.∑∂Π∂t[1], zero(T))
         fill!(prob.∑∂v∂t[1], zero(T))
-        fill!(prob.∑Δvdpc[1], zero(T))
 
         fill!(prob.∑∂Π∂t[2], zero(T))
         fill!(prob.∑∂v∂t[2], zero(T))
-        fill!(prob.∑Δvdpc[2], zero(T))
+        
 
         # density derivative with density diffusion at  xΔt½ 
         ∂ρ∂tDDT!(prob.∑∂ρ∂t,  prob.∇W, pairs, prob.xΔt½, prob.h, prob.m₀, prob.δᵩ, prob.c₀, prob.γ, prob.g, prob.ρ₀, prob.ρ, prob.v, prob.ptype; minthreads = 256) 
@@ -257,6 +260,12 @@ function _stepsolve!(prob::SPHProblem{T}, n::Int, ::StepByStep; timestepping = f
             dpcreg!(prob.∑Δvdpc, prob.v, prob.ρ, prob.P, pairs, x, prob.sphkernel, prob.dpc_l₀, prob.dpc_pmin, prob.dpc_pmax, prob.Δt, prob.dpc_λ, dpckernlim)  
             update_dpcreg!(prob.v, x, prob.∑Δvdpc, prob.Δt, prob.ptype)
         end
+        # Density Renormalisation every 15 timesteps
+        if cspmcorrn == 15
+            cspmcorr!(prob.buf2, prob.W, prob.ρ, prob.m₀, pairs, prob.ptype)
+            cspmcorrn = 0
+        end
+
 
         maxcΔx = maximum(maximum.(abs, prob.cΔx))
         if maxcΔx > 0.9 * prob.nui  

@@ -137,6 +137,13 @@ P_{ij}^H = \rho_0 g z_{ij}
 
 ### Corrected Smoothed Particle Method (CSPM) 
 
+#### Density Renormalisation.
+
+```math
+
+\rho_{i}^{norm} = \frac{\sum m_j W_{ij}}{\sum \frac{m_j}{\rho_j} W_{ij}}
+```
+
 
 ### Dynamic Particle Collision (DPC) correction.
 
