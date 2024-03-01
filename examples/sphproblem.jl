@@ -33,7 +33,7 @@ ptype   = CUDA.zeros(Int32, N)
 copyto!(ptype, DF_POINTS.ptype)
 v       = CUDA.fill((0.0, 0.0), length(cpupoints))
 
-sphprob =  SPHProblem(system, h, H, sphkernel, ρ, v, ptype, ρ₀, m₀, Δt, α, g, c₀, γ, δᵩ, CFL)
+sphprob =  SPHProblem(system, dx, h, H, sphkernel, ρ, v, ptype, ρ₀, m₀, Δt, α, g, c₀, γ, δᵩ, CFL)
 
 stepsolve!(sphprob, 1)
 
@@ -64,4 +64,4 @@ BenchmarkTools.Trial: 2 samples with 1 evaluation.
  Memory estimate: 76.60 MiB, allocs estimate: 1484501.
 =#
 
-@benchmark stepsolve!($sphprob, 1; simwl = GPUCellListSPH.Effective())
+#@benchmark stepsolve!($sphprob, 1; simwl = GPUCellListSPH.Effective())

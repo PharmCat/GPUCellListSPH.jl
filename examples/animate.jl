@@ -37,7 +37,7 @@ copyto!(ptype, DF_POINTS.ptype)
 
 v       = CUDA.fill((0.0, 0.0), length(cpupoints))
 
-sphprob =  SPHProblem(system, h, H, sphkernel, ρ, v, ptype, ρ₀, m₀, Δt, α, g, c₀, γ, δᵩ, CFL; s = 0.0)
+sphprob =  SPHProblem(system, dx, h, H, sphkernel, ρ, v, ptype, ρ₀, m₀, Δt, α, g, c₀, γ, δᵩ, CFL; s = 0.0)
 
 
 # batch - number of iteration until check time and vtp
@@ -45,9 +45,9 @@ sphprob =  SPHProblem(system, h, H, sphkernel, ρ, v, ptype, ρ₀, m₀, Δt, �
 # vtkwritetime - write vtp file each intervalgr()
 # vtkpath - path to vtp files
 # pcx - make paraview collection
-sphprob.dpc_l₀   = 0.01
-sphprob.dpc_λ    = 0.01
+sphprob.dpc_l₀   = 0.005
+sphprob.dpc_λ    = 0.005
 sphprob.dpc_pmax = 36000
-timesolve!(sphprob; batch = 100, timeframe = 1.1, writetime = 0.001, path = "D:/vtk/", pvc = true, anim = true)
+timesolve!(sphprob; batch = 100, timeframe = 5.0, writetime = 0.025, path = "D:/vtk/", pvc = true, anim = true)
 
 #makedf(sphprob)

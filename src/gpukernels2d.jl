@@ -587,7 +587,7 @@ function kernel_∂ρ∂tDDT!(∑∂ρ∂t,  ∇W, pairs, points, η², m₀, DD
     while index <= length(pairs)
         pair  = pairs[index]
         pᵢ    = pair[1]; pⱼ = pair[2]
-        if pᵢ > 0 # && !(isboundary[pᵢ] && isboundary[pᵢ]) 
+        if pᵢ > 0 && ptype[pᵢ] > 0 && ptype[pⱼ] > 0
             xᵢ    = points[pᵢ]
             xⱼ    = points[pⱼ]
             Δx    = (xᵢ[1] - xⱼ[1], xᵢ[2] - xⱼ[2])
@@ -814,23 +814,23 @@ Artificial viscosity part of momentum equation.
 J. Monaghan, Smoothed Particle Hydrodynamics, “Annual Review of Astronomy and Astrophysics”, 30 (1992), pp. 543-574.
 
 """
-function ∂Π∂t!(∑∂Π∂t, ∇W, pairs, points, h, ρ, α, v, c₀, m₀; minthreads::Int = 1024) 
+function ∂Π∂t!(∑∂Π∂t, ∇W, pairs, points, h, ρ, α, v, c₀, m₀, ptype; minthreads::Int = 1024) 
     η²    = (0.1 * h) * (0.1 * h)
-    gpukernel = @cuda launch=false kernel_∂Π∂t!(∑∂Π∂t, ∇W, pairs, points, h, η², ρ, α, v, c₀, m₀) 
+    gpukernel = @cuda launch=false kernel_∂Π∂t!(∑∂Π∂t, ∇W, pairs, points, h, η², ρ, α, v, c₀, m₀, ptype) 
     config = launch_configuration(gpukernel.fun)
     Nx = length(pairs)
     maxThreads = config.threads
     Tx  = min(minthreads, maxThreads, Nx)
     Bx = cld(Nx, Tx)
-    CUDA.@sync gpukernel(∑∂Π∂t, ∇W, pairs, points, h, η², ρ, α, v, c₀, m₀; threads = Tx, blocks = Bx)
+    CUDA.@sync gpukernel(∑∂Π∂t, ∇W, pairs, points, h, η², ρ, α, v, c₀, m₀, ptype; threads = Tx, blocks = Bx)
 end
-function kernel_∂Π∂t!(∑∂Π∂t, ∇W, pairs, points, h, η², ρ, α, v, c₀, m₀) 
+function kernel_∂Π∂t!(∑∂Π∂t, ∇W, pairs, points, h, η², ρ, α, v, c₀, m₀, ptype) 
     index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
 
     if index <= length(pairs)
         pair  = pairs[index]
         pᵢ    = pair[1]; pⱼ = pair[2]
-        if pᵢ != 0
+        if pᵢ != 0 && ptype[pᵢ] > 0 && ptype[pⱼ] > 0
             xᵢ    = points[pᵢ]
             xⱼ    = points[pⱼ]
             Δx    = (xᵢ[1] - xⱼ[1], xᵢ[2] - xⱼ[2])
@@ -894,7 +894,7 @@ end
 # J. P. Hughes and D. I. Graham, “Comparison of incompressible and weakly-compressible SPH models for free-surface water flows”, Journal of Hydraulic Research, 48 (2010), pp. 105-117.
 function pressure(ρ, γ, ρ₀, P₀, ptype)
     #return  P₀ * ((ρ / ρ₀) ^ γ - 1) * (ptype < 1 && ρ < ρ₀)
-    if ptype < 1 && ρ < ρ₀
+    if ptype < 0 && ρ < ρ₀
         return 0.0
     end
     return  P₀ * ((ρ / ρ₀) ^ γ - 1)
@@ -941,21 +941,21 @@ The momentum equation (without dissipation).
 
 
 """
-function ∂v∂t!(∑∂v∂t,  ∇W, P, pairs, m, ρ; minthreads::Int = 1024) 
-    gpukernel = @cuda launch=false kernel_∂v∂t!(∑∂v∂t,  ∇W, P, pairs, m, ρ) 
+function ∂v∂t!(∑∂v∂t,  ∇W, P, pairs, m, ρ, ptype; minthreads::Int = 1024) 
+    gpukernel = @cuda launch=false kernel_∂v∂t!(∑∂v∂t,  ∇W, P, pairs, m, ρ, ptype) 
     config = launch_configuration(gpukernel.fun)
     Nx = length(pairs)
     maxThreads = config.threads
     Tx  = min(minthreads, maxThreads, Nx)
     Bx = cld(Nx, Tx)
-    CUDA.@sync gpukernel(∑∂v∂t,  ∇W, P, pairs, m, ρ; threads = Tx, blocks = Bx)
+    CUDA.@sync gpukernel(∑∂v∂t,  ∇W, P, pairs, m, ρ, ptype; threads = Tx, blocks = Bx)
 end
-function kernel_∂v∂t!(∑∂v∂t, ∇W, P, pairs, m, ρ) 
+function kernel_∂v∂t!(∑∂v∂t, ∇W, P, pairs, m, ρ, ptype) 
     index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
     if index <= length(pairs)
         pair  = pairs[index]
         pᵢ    = pair[1]; pⱼ = pair[2]
-        if pᵢ != 0
+        if pᵢ != 0 && ptype[pᵢ] >= 0 && ptype[pⱼ] >= 0
 
             ρᵢ    = ρ[pᵢ]
             ρⱼ    = ρ[pⱼ]
@@ -1046,7 +1046,7 @@ function kernel_update_ρ!(ρ, ∑∂ρ∂t, Δt, ρ₀, ptype)
     index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
     if index <= length(ρ)
         ρval = ρ[index] + ∑∂ρ∂t[index] * Δt
-        if ρval < ρ₀ && ptype[index] < 1 ρval = ρ₀ end
+        if ρval < ρ₀ && ptype[index] < 0 ρval = ρ₀ end
         #=
         if isnan(ρval) || iszero(ρval) || ρval < 0.001
             @cuprintln "kernel update rho: index =  $index, rhoval = $ρval, rhoi = $(ρ[index]), dpdt = $(∑∂ρ∂t[index]), dt = $Δt, isboundary = $(isboundary[index])"
@@ -1149,7 +1149,7 @@ function kernel_update_all!(ρ, ρΔt½, v, vΔt½, x, xΔt½, ∑∂ρ∂t, ∑
 
         epsi       = -(∑∂ρ∂t[index] / ρΔt½[index]) * Δt
         ρval       = ρ[index]  * (2 - epsi)/(2 + epsi)
-        if ρval < ρ₀ && ptype[index] < 1 ρval = ρ₀ end
+        if ρval < ρ₀ && ptype[index] < 0 ρval = ρ₀ end
 
         #=
         if isnan(ρval) || iszero(ρval) || ρval < 0.01
@@ -1511,7 +1511,7 @@ function kernel_xsphcorr!(∑Δvxsph, v, ρ, W, pairs, m₀)
             ρᵢ    = ρ[pᵢ]
             ρⱼ    = ρ[pⱼ]
             
-            xsph  = 2m₀*W[index] / (ρᵢ + ρⱼ)
+            xsph  = 2m₀ * W[index] / (ρᵢ + ρⱼ)
             xsphv = (xsph * Δv[1], xsph * Δv[2])
 
             ∑Δvxsphˣ = ∑Δvxsph[1]
@@ -1520,6 +1520,62 @@ function kernel_xsphcorr!(∑Δvxsph, v, ρ, W, pairs, m₀)
             CUDA.@atomic ∑Δvxsphʸ[pᵢ] -=  xsphv[2]
             CUDA.@atomic ∑Δvxsphˣ[pⱼ] +=  xsphv[1]
             CUDA.@atomic ∑Δvxsphʸ[pⱼ] +=  xsphv[2]
+        end
+    end
+    return nothing
+end
+#####################################################################
+# * Rapaport D.C., 2004. The art of molecular dynamics simulation.
+#
+# Carlos Alberto Dutra Fraga Filho Julio Tomás Aquije Chacaltana
+# BOUNDARY TREATMENT TECHNIQUES IN SMOOTHED
+# PARTICLE HYDRODYNAMICS: IMPLEMENTATIONS IN FLUID
+# AND THERMAL SCIENCES AND RESULTS ANALYSIS
+#####################################################################
+"""
+    fbmolforce!(∑∂v∂t, pairs, points, d, r₀, ptype)
+
+The repulsive force exerted by the virtual particle on the fluid particle.
+
+* Rapaport, 2004
+
+n₁ = 12
+n₂ = 4
+"""
+function fbmolforce!(∑∂v∂t, pairs, points, d, r₀, ptype)
+    gpukernel = @cuda launch=false kernel_fbmolforce!(∑∂v∂t, pairs, points, d, r₀, ptype) 
+    config = launch_configuration(gpukernel.fun)
+    Nx = length(pairs)
+    maxThreads = config.threads
+    Tx  = min(maxThreads, Nx)
+    Bx = cld(Nx, Tx)
+    CUDA.@sync gpukernel(∑∂v∂t, pairs, points, d, r₀, ptype; threads = Tx, blocks = Bx)
+end
+function kernel_fbmolforce!(∑∂v∂t, pairs, points, d, r₀, ptype) 
+    index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
+
+    if index <= length(pairs)
+        pair  = pairs[index]
+        pᵢ    = pair[1]; pⱼ = pair[2]
+        if pᵢ != 0 && ptype[pᵢ] * ptype[pⱼ] < 0
+            xᵢ    = points[pᵢ]
+            xⱼ    = points[pⱼ]
+            Δx    = (xᵢ[1] - xⱼ[1], xᵢ[2] - xⱼ[2])
+            r²    = Δx[1]^2 + Δx[2]^2 
+            r     = sqrt(Δx[1]^2 + Δx[2]^2)
+            if r < r₀
+                Fc    = d * ((r₀ / r)^12 - (r₀ / r)^4) / r² 
+                F     = (Δx[1] * Fc, Δx[2] * Fc)
+                
+                ∑∂v∂tˣ = ∑∂v∂t[1]
+                ∑∂v∂tʸ = ∑∂v∂t[2] 
+
+                CUDA.@atomic ∑∂v∂tˣ[pᵢ] +=  F[1]
+                CUDA.@atomic ∑∂v∂tʸ[pᵢ] +=  F[2]
+                
+                CUDA.@atomic ∑∂v∂tˣ[pⱼ] -=  F[1]
+                CUDA.@atomic ∑∂v∂tʸ[pⱼ] -=  F[2]
+            end
         end
     end
     return nothing
