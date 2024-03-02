@@ -1,4 +1,4 @@
-## API 
+## Autodocs API 
 
 ```@autodocs
 Modules = [GPUCellListSPH]

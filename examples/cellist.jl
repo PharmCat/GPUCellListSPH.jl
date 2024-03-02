@@ -30,10 +30,8 @@ pprof()
 #PProf.kill()
 #Profile.clear()
 
-pairs       = GPUCellListSPH.neighborlistview(system)
-sort!(pairs, by = first)
-
-ranges = CUDA.fill((zero(Int32), zero(Int32)), system.n)
-GPUCellListSPH.pranges!(ranges, pairs) 
-
-@benchmark GPUCellListSPH.pranges!($ranges, $pairs)
+#pairs       = GPUCellListSPH.neighborlistview(system)
+#sort!(pairs, by = first)
+#ranges = CUDA.fill((zero(Int32), zero(Int32)), system.n)
+#GPUCellListSPH.pranges!(ranges, pairs) 
+#@benchmark GPUCellListSPH.pranges!($ranges, $pairs)

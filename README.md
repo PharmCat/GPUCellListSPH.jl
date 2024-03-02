@@ -125,6 +125,17 @@ sphprob =  SPHProblem(system, dx, h, H, sphkernel, ρ, v, ptype, ρ₀, m₀, Δ
 # writetime - write vtp file each interval
 # path - path to vtp files
 # pvc - make paraview collection
+# set DPC settings (not used by default)
+sphprob.dpc_l₀   = 0.005
+sphprob.dpc_λ    = 0.005
+sphprob.dpc_pmax = 36000
+# set surface tension constant 0 by default
+sphprob.s        = 0.05
+# set kinematic fluid viscosity constant 0 by default
+sphprob.𝜈        = 0.2
+# XSPH correction constant 0 by default
+xsph_𝜀           = 0.5
+
 timesolve!(sphprob; batch = 10, timeframe = 1.0, writetime = 0.02, path = "D:/vtk/", pvc = true)
 
 # timestepping adjust dt

@@ -49,6 +49,8 @@ sphprob.dpc_l₀   = 0.005
 sphprob.dpc_λ    = 0.005
 sphprob.dpc_pmax = 36000
 sphprob.s        = 0.05
+sphprob.𝜈        = 0.2
+xsph_𝜀           = 0.5
 timesolve!(sphprob; batch = 100, timeframe = 10.0, writetime = 0.025, path = "D:/vtk/", pvc = true, anim = true, 
 plotsettings = Dict(:leg => false, :xlims => (0, 4), :ylims => (0, 3.5)))
 

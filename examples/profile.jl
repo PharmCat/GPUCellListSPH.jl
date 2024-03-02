@@ -31,15 +31,18 @@ system  = GPUCellList(cpupoints, cellsize, dist)
 N       = length(cpupoints)
 ρ       = CUDA.zeros(Float64, N)
 copyto!(ρ, DF_POINTS.Rhop)
-
 ptype   = CUDA.zeros(Int32, N)
 copyto!(ptype, DF_POINTS.ptype)
-
 v       = CUDA.fill((0.0, 0.0), length(cpupoints))
 
 sphprob =  SPHProblem(system,  dx, h, H, sphkernel, ρ, v, ptype, ρ₀, m₀, Δt, α, g, c₀, γ, δᵩ, CFL; s = 0.0)
-sphprob.dpc_l₀   = 0.01
-s                = 0.01
+
+sphprob.dpc_l₀   = 0.005
+sphprob.dpc_λ    = 0.005
+sphprob.dpc_pmax = 36000
+sphprob.s        = 0.05
+sphprob.𝜈        = 0.2
+xsph_𝜀           = 0.5
 stepsolve!(sphprob, 1)
 
 @benchmark stepsolve!(sphprob, 1000)

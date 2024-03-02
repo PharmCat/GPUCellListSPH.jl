@@ -38,7 +38,6 @@ mutable struct SPHProblem{T}
     ∑∇W                                         # sum of kernel gradients
     W::CuArray                                  # values of kernel gradient for each pair 
     ∇W::CuArray                                 # values of kernel gradient for each pair 
-    ∑∂Π∂t                                       # artificial viscosity
     ∑∂v∂t                                       # acceleration (momentum equation)
     ∑∂ρ∂t                                       # rho diffusion - density derivative function (with diffusion)
     ∑Δvdpc                                      # velocity dynamic particle collision correction 
@@ -53,6 +52,7 @@ mutable struct SPHProblem{T}
     m₀::T                                 # Initial mass
     Δt::T                                 # default Δt
     α::T                                  # Artificial viscosity alpha constant
+    𝜈::T                                  # kinematic fluid viscosity
     g::T                                  # gravity constant
     c₀::T                                 # speed of sound
     γ                                           # Gamma, 7 for water (used in the pressure equation of state)
@@ -69,6 +69,7 @@ mutable struct SPHProblem{T}
     dpc_pmin::T     # minimal pressure
     dpc_pmax::T     # maximum pressure
     dpc_λ::T        # λ is a non-dimensional adjusting parameter
+    xsph_𝜀::T
     function SPHProblem(system::GPUCellList{T}, dx, h::Float64, H::Float64, sphkernel::AbstractSPHKernel, ρ, v, ptype, ρ₀::Float64, m₀::Float64, Δt::Float64, α::Float64, g::Float64, c₀::Float64, γ, δᵩ::Float64, CFL::Float64; s::Float64 = 0.0) where T <: AbstractFloat
 
         dim = length(CUDA.@allowscalar first(system.points))
@@ -79,8 +80,6 @@ mutable struct SPHProblem{T}
         W       = CUDA.zeros(T, length(system.pairs))
         ∇W      = CUDA.fill(zero(NTuple{dim, T}), length(system.pairs))
         ∑∂ρ∂t   = CUDA.zeros(T, N)
-
-        ∑∂Π∂t   = Tuple(CUDA.zeros(T, N) for n in 1:dim)
 
         ∑∂v∂t   = Tuple(CUDA.zeros(T, N) for n in 1:dim)
 
@@ -107,7 +106,6 @@ mutable struct SPHProblem{T}
         ∑∇W, 
         W, 
         ∇W, 
-        ∑∂Π∂t, 
         ∑∂v∂t, 
         ∑∂ρ∂t, 
         ∑Δvdpc, 
@@ -121,7 +119,8 @@ mutable struct SPHProblem{T}
         ρ₀, 
         m₀, 
         Δt, 
-        α, 
+        α,
+        0.0,
         g, 
         c₀, 
         γ, 
@@ -136,7 +135,8 @@ mutable struct SPHProblem{T}
         0.0, 
         1.0, 
         10000.0, 
-        0.01)
+        0.01,
+        0.0)
     end
 end
 
@@ -180,14 +180,8 @@ function _stepsolve!(prob::SPHProblem{T}, n::Int, ::StepByStep; timestepping = f
         end
 
 
-
-        fill!(prob.∑∂Π∂t[1], zero(T))
         fill!(prob.∑∂v∂t[1], zero(T))
-        #fill!(prob.∑∂v∂tdpc[1], zero(Float64))
-
-        fill!(prob.∑∂Π∂t[2], zero(T))
         fill!(prob.∑∂v∂t[2], zero(T))
-        #fill!(prob.∑∂v∂tdpc[2], zero(Float64))
 
 
         if length(prob.∇W) != length(pairs)
@@ -197,19 +191,23 @@ function _stepsolve!(prob::SPHProblem{T}, n::Int, ::StepByStep; timestepping = f
             prob.W =  CUDA.fill(zero(T), length(pairs))
         end
         # kernels for each pair
-        W_2d!(prob.W, pairs, x, prob.sphkernel, prob.H⁻¹)
+        W_2d!(prob.W, pairs, x, prob.H⁻¹, prob.sphkernel)
         # kernels gradientfor each pair
-        ∇W_2d!(prob.∇W, pairs, x, prob.sphkernel, prob.H⁻¹)
+        ∇W_2d!(prob.∇W, pairs, x, prob.H⁻¹, prob.sphkernel)
         # density derivative with density diffusion
-        ∂ρ∂tDDT!(prob.∑∂ρ∂t, prob.∇W, pairs, x, prob.h, prob.m₀, prob.δᵩ, prob.c₀, prob.γ, prob.g, prob.ρ₀, prob.ρ, prob.v, prob.ptype; minthreads = 256) 
-        # artificial viscosity
-        ∂Π∂t!(prob.∑∂Π∂t, prob.∇W, pairs, x, prob.h, prob.ρ, prob.α, prob.v, prob.c₀, prob.m₀, prob.ptype)
+        ∂ρ∂tDDT!(prob.∑∂ρ∂t, pairs, prob.∇W, prob.ρ, prob.v, x, prob.h, prob.m₀, prob.ρ₀, prob.c₀, prob.γ, prob.g, prob.δᵩ, prob.ptype; minthreads = 256) 
         #  pressure
         pressure!(prob.P, prob.ρ, prob.c₀, prob.γ, prob.ρ₀, prob.ptype) 
         # momentum equation 
         ∂v∂t!(prob.∑∂v∂t,  prob.∇W, prob.P, pairs,  prob.m₀, prob.ρ, prob.ptype) 
-        # add gravity and artificial viscosity 
-        completed_∂v∂t!(prob.∑∂v∂t, prob.∑∂Π∂t,  gravvec(prob.g, prob.dim)) 
+        # add artificial viscosity
+        ∂v∂t_av!(prob.∑∂v∂t, prob.∇W, pairs, x, prob.h, prob.ρ, prob.α, prob.v, prob.c₀, prob.m₀, prob.ptype)
+        # laminar shear stresse
+        if prob.𝜈 > 0
+            ∂v∂t_visc!(prob.∑∂v∂t, prob.∇W, prob.v, prob.ρ, x, pairs, prob.h, prob.m₀, prob.𝜈, prob.ptype)
+        end
+        # add gravity 
+        ∂v∂t_addgrav!(prob.∑∂v∂t, gravvec(prob.g, prob.dim)) 
         #  Boundary forces
         fbmolforce!(prob.∑∂v∂t, pairs, x, 0.4, 2 * prob.dx, prob.ptype)
         # add surface tension if s > 0
@@ -219,7 +217,7 @@ function _stepsolve!(prob::SPHProblem{T}, n::Int, ::StepByStep; timestepping = f
         
         # following steps (update_ρ!, update_vp∂v∂tΔt!, update_xpvΔt!) can be done in one kernel 
         # calc ρ at Δt½
-        update_ρ!(prob.ρΔt½, prob.∑∂ρ∂t, prob.Δt * 0.5, prob.ρ₀, prob.ptype)
+        update_ρp∂ρ∂tΔt!(prob.ρΔt½, prob.∑∂ρ∂t, prob.Δt * 0.5, prob.ρ₀, prob.ptype)
         # calc v at Δt½
         update_vp∂v∂tΔt!(prob.vΔt½, prob.∑∂v∂t, prob.Δt * 0.5, prob.ptype) 
         # calc x at Δt½
@@ -227,25 +225,24 @@ function _stepsolve!(prob::SPHProblem{T}, n::Int, ::StepByStep; timestepping = f
 
         # set derivative to zero for Δt½ calc
 
-        
-
-        fill!(prob.∑∂Π∂t[1], zero(T))
         fill!(prob.∑∂v∂t[1], zero(T))
-
-        fill!(prob.∑∂Π∂t[2], zero(T))
         fill!(prob.∑∂v∂t[2], zero(T))
         
 
         # density derivative with density diffusion at  xΔt½ 
-        ∂ρ∂tDDT!(prob.∑∂ρ∂t,  prob.∇W, pairs, prob.xΔt½, prob.h, prob.m₀, prob.δᵩ, prob.c₀, prob.γ, prob.g, prob.ρ₀, prob.ρ, prob.v, prob.ptype; minthreads = 256) 
-        # artificial viscosity at xΔt½ 
-        ∂Π∂t!(prob.∑∂Π∂t, prob.∇W, pairs, prob.xΔt½, prob.h, prob.ρ, prob.α, prob.v, prob.c₀, prob.m₀, prob.ptype)
+        ∂ρ∂tDDT!(prob.∑∂ρ∂t, pairs, prob.∇W, prob.ρΔt½, prob.vΔt½, prob.xΔt½, prob.h, prob.m₀, prob.ρ₀, prob.c₀, prob.γ, prob.g, prob.δᵩ, prob.ptype; minthreads = 256) 
         #  pressure
-        pressure!(prob.P, prob.ρ, prob.c₀, prob.γ, prob.ρ₀, prob.ptype) 
+        pressure!(prob.P, prob.ρΔt½, prob.c₀, prob.γ, prob.ρ₀, prob.ptype) 
         # momentum equation 
-        ∂v∂t!(prob.∑∂v∂t, prob.∇W, prob.P, pairs,  prob.m₀, prob.ρ, prob.ptype)
-        # add gravity and artificial viscosity
-        completed_∂v∂t!(prob.∑∂v∂t, prob.∑∂Π∂t, gravvec(prob.g, prob.dim))
+        ∂v∂t!(prob.∑∂v∂t, prob.∇W, prob.P, pairs,  prob.m₀, prob.ρΔt½, prob.ptype)
+        # add artificial viscosity at xΔt½ 
+        ∂v∂t_av!(prob.∑∂v∂t, prob.∇W, pairs, prob.xΔt½, prob.h, prob.ρΔt½, prob.α, prob.vΔt½, prob.c₀, prob.m₀, prob.ptype)
+        # laminar shear stresse
+        if prob.𝜈 > 0
+            ∂v∂t_visc!(prob.∑∂v∂t, prob.∇W, prob.vΔt½, prob.ρΔt½, prob.xΔt½, pairs, prob.h, prob.m₀, prob.𝜈, prob.ptype)
+        end
+        # add gravity 
+        ∂v∂t_addgrav!(prob.∑∂v∂t,gravvec(prob.g, prob.dim))
         #  Boundary forces
         fbmolforce!(prob.∑∂v∂t, pairs, x, 0.4, 2 * prob.dx, prob.ptype)
         # add surface tension if s > 0
@@ -253,13 +250,23 @@ function _stepsolve!(prob::SPHProblem{T}, n::Int, ::StepByStep; timestepping = f
             ∂v∂tpF!(prob.∑∂v∂t, pairs, prob.xΔt½, prob.s, prob.h, prob.m₀, prob.ptype) 
         end
         # update all with symplectic position Verlet scheme
-        update_all!(prob.ρ, prob.ρΔt½, prob.v, prob.vΔt½, x, prob.xΔt½, prob.∑∂ρ∂t, prob.∑∂v∂t, prob.Δt, prob.cΔx, prob.ρ₀, prob.ptype)
+        symplectic_update!(prob.ρ, prob.ρΔt½, prob.v, prob.vΔt½, x, prob.xΔt½, prob.∑∂ρ∂t, prob.∑∂v∂t, prob.Δt, prob.cΔx, prob.ρ₀, prob.ptype)
         
         # Dynamic Particle Collision (DPC) 
-        if prob.dpc_l₀ > 0 && prob.dpc_λ > 0
-            dpcreg!(prob.∑Δvdpc, prob.v, prob.ρ, prob.P, pairs, x, prob.sphkernel, prob.dpc_l₀, prob.dpc_pmin, prob.dpc_pmax, prob.Δt, prob.dpc_λ, dpckernlim)  
-            update_dpcreg!(prob.v, x, prob.∑Δvdpc, prob.Δt, prob.ptype)
+        if prob.dpc_l₀ > 0
+            #  pressure
+            pressure!(prob.P, prob.ρ, prob.c₀, prob.γ, prob.ρ₀, prob.ptype) 
+            dpcreg!(prob.buf2, prob.v, prob.ρ, prob.P, pairs, x, prob.sphkernel, prob.dpc_l₀, prob.dpc_pmin, prob.dpc_pmax, prob.Δt, prob.dpc_λ, dpckernlim)  
+            update_dpcreg!(prob.v, x, prob.buf2, prob.Δt, prob.ptype)
         end
+
+        # XSPH correction.
+        if prob.xsph_𝜀 > 0
+            xsphcorr!(prob.buf2, prob.pairs, prob.W, prob.ρ, prob.v, prob.m₀, prob.𝜀)
+            update_xsphcorr!(prob.v, prob.buf2, prob.ptype) 
+        end
+
+
         # Density Renormalisation every 15 timesteps
         if cspmcorrn == 15
             cspmcorr!(prob.buf2, prob.W, prob.ρ, prob.m₀, pairs, prob.ptype)

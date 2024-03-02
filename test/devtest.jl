@@ -783,3 +783,107 @@ function neiblist_2d!(nlist, ncnt, points,  celllist, cellpnum, pcell, dist, off
     CUDA.@sync gpukernel(nlist, ncnt, points,  celllist, cellpnum, pcell, dist, offset; threads = Tx, blocks = Bx)
 end
 =#
+#=
+function ∂ρ∂tDDT2!(∑∂ρ∂t,  ∇W, pairs, points, ranges, h, m₀, δᵩ, c₀, γ, g, ρ₀, ρ, v, ptype) 
+    if length(pairs) != length(∇W) error("Length shoul be equal") end
+
+    gpukernel = @cuda launch=false kernel_∂ρ∂tDDT2!(∑∂ρ∂t,  ∇W, pairs, points, ranges, h, m₀, δᵩ, c₀, γ, g, ρ₀, ρ, v, ptype) 
+    config = launch_configuration(gpukernel.fun)
+    Nx = length(ranges)
+    maxThreads = config.threads
+    Tx  = min(maxThreads, Nx)
+    Bx  = cld(Nx, Tx)
+    CUDA.@sync gpukernel(∑∂ρ∂t, ∇W, pairs, points, ranges, h, m₀, δᵩ, c₀, γ, g, ρ₀, ρ, v, ptype; threads = Tx, blocks = Bx)
+end
+function kernel_∂ρ∂tDDT2!(∑∂ρ∂t,  ∇W, pairs, points, ranges, h, m₀, δᵩ, c₀, γ, g, ρ₀, ρ, v, ptype) 
+    index  = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
+    stride = gridDim().x * blockDim().x
+    #s      = index * (stride - 1) + index
+    #e      = stride - 1
+    # move it outside kernel
+    γ⁻¹  = 1/γ
+    η²   = (0.1*h)*(0.1*h)
+    Cb    = (c₀ * c₀ * ρ₀) * γ⁻¹
+    DDTgz = ρ₀ * g / Cb
+    DDTkh = 2 * h * δᵩ
+
+    while index <= length(ranges)
+        s, e = ranges[index]
+        for pind in s:e
+        pair  = pairs[index]
+        pᵢ    = pair[1]; pⱼ = pair[2]
+        if pᵢ > 0 # && !(isboundary[pᵢ] && isboundary[pᵢ]) 
+            xᵢ    = points[pᵢ]
+            xⱼ    = points[pⱼ]
+            Δx    = (xᵢ[1] - xⱼ[1], xᵢ[2] - xⱼ[2])
+            r²    = Δx[1]^2 + Δx[2]^2 
+            # for timestep Δt½ d != actual range
+            # one way - not calculate values out of 2h
+            # if r² > (2h)^2 return nothing end
+            #=
+            Cb = (c₀ * c₀ * ρ₀) * γ⁻¹
+            Pᴴ =  ρ₀ * g * z
+            ᵸᵀᴴ
+            =#
+            ρᵢ    = ρ[pᵢ]
+            ρⱼ    = ρ[pⱼ]
+
+            Δv    = (v[pᵢ][1] - v[pⱼ][1], v[pᵢ][2] - v[pⱼ][2])
+
+            ∇Wᵢⱼ  = ∇W[index]
+            #=
+            z  = Δx[2]
+            Cb = (c₀ * c₀ * ρ₀) * γ⁻¹
+            Pᴴ =  ρ₀ * g * z
+            ρᴴ =  ρ₀ * (((Pᴴ + 1)/Cb)^γ⁻¹ - 1)
+            ψ  = 2 * (ρᵢ - ρⱼ) * Δx / r²
+            =#
+            dot3  = -(Δx[1] * ∇Wᵢⱼ[1] + Δx[2] * ∇Wᵢⱼ[2]) #  - Δx ⋅ ∇Wᵢⱼ
+
+            # as actual range at timestep Δt½  may be greateg  - some problems can be here
+            if 1 + DDTgz * Δx[2] < 0 || 1 - DDTgz * Δx[2] < 0 return nothing end
+            
+            m₀dot     = m₀ * (Δv[1] * ∇Wᵢⱼ[1] + Δv[2] * ∇Wᵢⱼ[2])  #  Δv ⋅ ∇Wᵢⱼ
+            ∑∂ρ∂ti = ∑∂ρ∂tj = m₀dot
+
+            if ptype[pᵢ] >= 1
+                drhopvp = ρ₀ * powfancy7th(1 + DDTgz * Δx[2], γ⁻¹, γ) - ρ₀ ## << CHECK
+                visc_densi = DDTkh * c₀ * (ρⱼ - ρᵢ - drhopvp) / (r² + η²)
+                delta_i    = visc_densi * dot3 * m₀ / ρⱼ
+                ∑∂ρ∂ti    += delta_i 
+            end
+            CUDA.@atomic ∑∂ρ∂t[pᵢ] += ∑∂ρ∂ti 
+
+            if ptype[pⱼ] >= 1
+                drhopvn = ρ₀ * powfancy7th(1 - DDTgz * Δx[2], γ⁻¹, γ) - ρ₀
+                visc_densi = DDTkh * c₀ * (ρᵢ - ρⱼ - drhopvn) / (r² + η²)
+                delta_j    = visc_densi * dot3 * m₀ / ρᵢ
+                ∑∂ρ∂tj    += delta_j 
+            end
+            CUDA.@atomic ∑∂ρ∂t[pⱼ] += ∑∂ρ∂tj
+            
+            #=
+            if isnan(delta_j) || isnan(m₀dot)  || isnan(ρᵢ) || isnan(ρⱼ) 
+                @cuprintln "kernel_DDT 1 isnan dx1 = $(Δx[1]) , dx2 = $(Δx[2]) rhoi = $ρᵢ , dot3 = $dot3 , visc_densi = $visc_densi drhopvn = $drhopvn $(∇W[1]) $(Δv[1])"
+                error() 
+            end
+            if isinf(delta_j) || isinf(m₀dot)  || isinf(delta_i) 
+                @cuprintln "kernel_DDT 2 inf: dx1 = $(Δx[1]) , dx2 = $(Δx[2]) rhoi = $ρᵢ , rhoj = $ρⱼ , dot3 = $dot3 ,  delta_i = $delta_i , delta_j = $delta_j , drhopvn = $drhopvn , visc_densi = $visc_densi , $(∇W[1]) , $(Δv[1])"
+                error() 
+            end
+            =#
+            #mlfac = MotionLimiter[pᵢ] * MotionLimiter[pⱼ]
+            #=
+            if isnan(∑∂ρ∂tval1) || isnan(∑∂ρ∂tval2) || abs(∑∂ρ∂tval1) >  10000000 || abs(∑∂ρ∂tval2) >  10000000
+                @cuprintln "kernel DDT: drhodti = $∑∂ρ∂ti drhodtj = $∑∂ρ∂tj, dx1 = $(Δx[1]), dx2 = $(Δx[2]) rhoi = $ρᵢ, rhoj = $ρⱼ, dot3 = $dot3, visc_densi = $visc_densi, drhopvn = $drhopvn, dw = $(∇W[1]),  dv = $(Δv[1])"
+                error() 
+            end
+            =#
+            
+        end
+        index += stride
+        end
+    end
+    return nothing
+end
+=#

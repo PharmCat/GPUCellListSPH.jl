@@ -22,7 +22,7 @@ Particle indexes: ``i``, ``j``;
 
 ``P, P_i, P_j`` - pressure;
 
-``\Pi`` - artificial viscosity term;
+``\Pi`` - viscous energy dissipation term (artificial viscosity);
 
 ``\textbf{r}, \textbf{r}_i, \textbf{r}_j`` - particle location (vector);
 
@@ -93,6 +93,11 @@ Monaghan style artificial viscosity:
 
 J. Monaghan, “Smoothed particle hydrodynamics”, Reports on Progress in Physics, 68 (2005), pp. 1703-1759.
 
+### Laminar shear stresse
+
+```math
+\frac{\partial \textbf{v}_i}{\partial t} = \sum \frac{m_j}{\rho_j}  \left( 2 \nu_i \frac{\textbf{r}_{ij} \cdot \nabla_i W_{ij} }{r_{ij}^2} \right) \textbf{v}_{ij}
+```
 
 ### Momentum Equation with Artificial Viscosity
 
@@ -128,8 +133,11 @@ P_{ij}^H = \rho_0 g z_{ij}
 
 ```
 
-
 ### XSPH correction
+
+
+Correction to avoid the particles' disordered movement and prevent penetration between them (Monaghan JJ, 1989).
+
 
 ```math
 \hat{\textbf{v}_{i}} = - \epsilon \sum m_j \frac{\textbf{v}_{ij}}{\overline{\rho}_{ij}} W_{ij}
@@ -139,6 +147,8 @@ P_{ij}^H = \rho_0 g z_{ij}
 
 #### Density Renormalisation.
 
+Corrected Smoothed Particle Method (CSPM) Density Renormalisation (Chen et al. 1999).
+
 ```math
 
 \rho_{i}^{norm} = \frac{\sum m_j W_{ij}}{\sum \frac{m_j}{\rho_j} W_{ij}}
@@ -147,6 +157,7 @@ P_{ij}^H = \rho_0 g z_{ij}
 
 ### Dynamic Particle Collision (DPC) correction.
 
+Dynamic pair-wise Particle Collision (DPC) technique adopting dynamic form of the collision and repulsive terms to improve the pressure field (Jandaghian et al. 2022).
 
 ```math
 
@@ -183,6 +194,54 @@ k_{ij} =  \begin{cases} \chi_{ij} & 0.5 \le {r}_{ij}/l_0 < 1 \\ 1 & {r}_{ij}/l_0
 
 ### Shifting algorithm
 
+*Not done*
 
 ### Time stepping
 
+*TBD*
+
+### Boundary force
+
+The repulsive force exerted by the virtual particle on the fluid particle (Rapaport, 2004), n₁ = 12, n₂ = 4, D = 0.4.
+
+```math
+F = D * \\frac{\\left( (\\frac{r_0}{\\textbf{r}_{ij}})^{n_1} - (\\frac{r_0}{\\textbf{r}_{ij}})^{n_2}\\right)}{r_{ij}^2}
+```
+
+### Reference
+
+
+* Chen JK, Beraun JE, Carney TC (1999) A corrective smoothed particle method for boundary value problems in heat conduction. Int. J. Num. Meth. Engng. https://doi.org/10.1002/(SICI)1097-0207(19990920)46:2<231::AID-NME672>3.0.CO;2-K
+
+* Carlos Alberto Dutra Fraga Filho, Reflective Boundary Conditions Coupled With the SPH Method for the Three-Dimensional Simulation of Fluid-Structure Interaction With Solid Boundaries, 2023 10.21203/rs.3.rs-3214518/v1 
+
+* Carlos Alberto Dutra Fraga Filho, Julio Tomás Aquije Chacaltana,  Boundary treatment techniques in smoothed particle hydrodynamics: implementations in fluid and thermal sciences and results analysis
+
+* J. J. Monaghan, R. A. Gingold, Shock simulation by the particle method sph, Journal of Computational Physics 52 (1983) 374–389. doi:https: //doi.org/10.1016/0021-9991(83)90036-0
+
+* Monaghan JJ (1989) On the problem of penetration in particle methods. J Comput Phys. https://doi.org/10.1016/0021-9991(89)90032-6
+
+* J. Monaghan, Smoothed Particle Hydrodynamics, “Annual Review of Astronomy and Astrophysics”, 30 (1992), pp. 543-574.
+
+* J. Monaghan, “Smoothed particle hydrodynamics”, Reports on Progress in Physics, 68 (2005), pp. 1703-1759.
+
+* M. Jandaghian, A. Krimi, A. R. Zarrati, A. Shakibaeinia, Enhanced weakly-compressible mps method for violent free-surface flows: Role of particle regularization techniques, Journal of Computational Physics 434 (2021) 110202. doi:https://doi.org/10.1016/j.jcp.2021.110202.
+
+* Mojtaba Jandaghian, Herman Musumari Siaben, Ahmad Shakibaeinia, Stability and accuracy of the weakly compressible SPH with particle regularization techniques https://arxiv.org/pdf/2110.10076.pdf
+
+* J. P. Hughes and D. I. Graham, “Comparison of incompressible and weakly-compressible SPH models for free-surface water flows”, Journal of Hydraulic Research, 48 (2010), pp. 105-117.
+
+* A. Ferrari et al., “A new 3D parallel SPH scheme for free surface flows”, Computers and Fluids, 38 (2009), pp. 1203–1217.
+
+* Gotoh, H., Shibahara, T. and Sakai, T. 2001 “Sub-particle-scale turbulence model for the MPSmethod — Lagrangian flow model for hydraulic engineering,” Comp. Fluid Dyn. J. 9(4)339–347 
+
+* Edmond Y.M. Lo, Songdong Shao, Simulation of near-shore solitary wave mechanics by an incompressible SPH method, 2002
+
+
+### See also
+
+* Pawan Negi, Prabhu Ramachandran, How to train your solver: Verification of boundary conditions for smoothed particle hydrodynamics, 2022
+
+* https://github.com/DualSPHysics/DualSPHysics/wiki/3.-SPH-formulation
+
+* https://pysph.readthedocs.io/en/1.0a1/reference/equations.html

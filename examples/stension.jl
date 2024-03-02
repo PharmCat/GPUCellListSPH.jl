@@ -36,7 +36,7 @@ copyto!(ptype, DF_POINTS.ptype)
 
 v       = CUDA.fill((0.0, 0.0), length(cpupoints))
 
-sphprob =  SPHProblem(system, h, H, sphkernel, ρ, v, ptype, ρ₀, m₀, Δt, α, g, c₀, γ, δᵩ, CFL; s = s)
+sphprob =  SPHProblem(system, dx, h, H, sphkernel, ρ, v, ptype, ρ₀, m₀, Δt, α, g, c₀, γ, δᵩ, CFL; s = s)
 
 prob = sphprob
 

@@ -319,6 +319,8 @@ function kernel_pranges!(ranges, pairs)
     end
     return nothing
 end
+
+#∑∂v∂t, ∑∂ρ∂t, pairs, W, ∇W, ∑W, ∑∇W, ρ, P, v, points, dx, h, h⁻¹, H, H⁻¹, η², m₀, ρ₀, c₀, γ, γ⁻¹,g, δᵩ, α, β, 𝜈, s, dpc_l₀, dpc_pmin, dpc_pmax, dpc_λ, xsph_𝜀, Δt, sphkernel, ptype
 #####################################################################
 #####################################################################
 # SPH
@@ -329,16 +331,16 @@ end
 
 Compute kernel values for each particles pair in list. Update `W`. See SPHKernels.jl for details.
 """
-function W_2d!(W, pairs, points, sphkernel, H⁻¹) 
-    gpukernel = @cuda launch=false kernel_W_2d!(W, pairs, points, sphkernel, H⁻¹) 
+function W_2d!(W, pairs, points, H⁻¹, sphkernel) 
+    gpukernel = @cuda launch=false kernel_W_2d!(W, pairs, points, H⁻¹, sphkernel) 
     config = launch_configuration(gpukernel.fun)
     Nx = length(pairs)
     maxThreads = config.threads
     Tx  = min(maxThreads, Nx)
     Bx = cld(Nx, Tx)
-    CUDA.@sync gpukernel(W, pairs, points, sphkernel, H⁻¹; threads = Tx, blocks = Bx)
+    CUDA.@sync gpukernel(W, pairs, points, H⁻¹, sphkernel; threads = Tx, blocks = Bx)
 end
-function kernel_W_2d!(W, pairs, points, sphkernel, H⁻¹) 
+function kernel_W_2d!(W, pairs, points, H⁻¹, sphkernel) 
     index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
     if index <= length(pairs)
         pair  = pairs[index]
@@ -399,16 +401,16 @@ end
 Compute gradients. Update `∇W`. See SPHKernels.jl for details.
 
 """
-function ∇W_2d!(∇W, pairs, points, kernel, H⁻¹) 
-    gpukernel = @cuda launch=false kernel_∇W_2d!(∇W, pairs, points, kernel, H⁻¹) 
+function ∇W_2d!(∇W, pairs, points, H⁻¹, kernel) 
+    gpukernel = @cuda launch=false kernel_∇W_2d!(∇W, pairs, points, H⁻¹, kernel) 
     config = launch_configuration(gpukernel.fun)
     Nx = length(pairs)
     maxThreads = config.threads
     Tx  = min(maxThreads, Nx)
     Bx = cld(Nx, Tx)
-    CUDA.@sync gpukernel(∇W, pairs, points, kernel, H⁻¹; threads = Tx, blocks = Bx)
+    CUDA.@sync gpukernel(∇W, pairs, points, H⁻¹, kernel; threads = Tx, blocks = Bx)
 end
-function kernel_∇W_2d!(∇W, pairs, points, kernel, H⁻¹) 
+function kernel_∇W_2d!(∇W, pairs, points, H⁻¹, kernel) 
     index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
     if index <= length(pairs)
         pair  = pairs[index]
@@ -512,6 +514,7 @@ function kernel_∑∇W_2d!(∑∇W, pairs, points, kernel, H⁻¹)
     return nothing
 end
 
+#∑∂v∂t, ∑∂ρ∂t, pairs, W, ∇W, ∑W, ∑∇W, ρ, P, v, points, dx, h, h⁻¹, H, H⁻¹, η², m₀, ρ₀, c₀, γ, γ⁻¹, g, δᵩ, α, β, 𝜈, s, dpc_l₀, dpc_pmin, dpc_pmax, dpc_λ, xsph_𝜀, Δt, sphkernel, ptype
 #####################################################################
 # https://discourse.julialang.org/t/can-this-be-written-even-faster-cpu/109924/28
 @inline function powfancy7th(x, γ⁻¹, γ)
@@ -535,7 +538,7 @@ end
     
     ∂ρ∂tDDT!(∑∂ρ∂t,  ∇W, pairs, points, h, m₀, δᵩ, c₀, γ, g, ρ₀, ρ, v, ptype) 
 
-Compute ∂ρ∂t - density derivative includind density diffusion.
+Compute ∂ρ∂t - density derivative includind density diffusion. *Replace all values and update `∑∂ρ∂t`.*
 
 ```math
 
@@ -558,7 +561,7 @@ P_{ij}^H = \\rho_0 g z_{ij}
 ``z_{ij}`` - vertical distance.
 
 """
-function ∂ρ∂tDDT!(∑∂ρ∂t::CuArray{T},  ∇W, pairs, points, h, m₀, δᵩ, c₀, γ, g, ρ₀, ρ, v, ptype; minthreads::Int = 1024)  where T
+function ∂ρ∂tDDT!(∑∂ρ∂t::CuArray{T}, pairs, ∇W, ρ, v, points, h, m₀, ρ₀, c₀, γ, g, δᵩ, ptype; minthreads::Int = 1024)  where T
     fill!(∑∂ρ∂t, zero(T))
     η²    = (0.1*h)*(0.1*h)
     γ⁻¹   = 1/γ
@@ -567,15 +570,15 @@ function ∂ρ∂tDDT!(∑∂ρ∂t::CuArray{T},  ∇W, pairs, points, h, m₀, 
     DDTgz = ρ₀ * g / Cb
     if length(pairs) != length(∇W) error("Length shoul be equal") end
 
-    gpukernel = @cuda launch=false kernel_∂ρ∂tDDT!(∑∂ρ∂t,  ∇W, pairs, points, η², m₀, DDTkh, γ, γ⁻¹, DDTgz, ρ₀, ρ, v, ptype) 
+    gpukernel = @cuda launch=false kernel_∂ρ∂tDDT!(∑∂ρ∂t, pairs, ∇W, ρ, v, points, η², m₀, ρ₀, γ, γ⁻¹, DDTkh, DDTgz, ptype) 
     config = launch_configuration(gpukernel.fun)
     Nx = length(pairs)
     maxThreads = config.threads
     Tx  = min(minthreads, maxThreads, Nx)
     Bx  = cld(Nx, Tx)
-    CUDA.@sync gpukernel(∑∂ρ∂t, ∇W, pairs, points, η², m₀, DDTkh, γ, γ⁻¹, DDTgz, ρ₀, ρ, v, ptype; threads = Tx, blocks = Bx)
+    CUDA.@sync gpukernel(∑∂ρ∂t, pairs, ∇W, ρ, v, points, η², m₀, ρ₀, γ, γ⁻¹, DDTkh, DDTgz, ptype; threads = Tx, blocks = Bx)
 end
-function kernel_∂ρ∂tDDT!(∑∂ρ∂t,  ∇W, pairs, points, η², m₀, DDTkh, γ, γ⁻¹, DDTgz, ρ₀, ρ, v, ptype) 
+function kernel_∂ρ∂tDDT!(∑∂ρ∂t, pairs, ∇W, ρ, v, points, η², m₀, ρ₀, γ, γ⁻¹, DDTkh, DDTgz, ptype) 
     tindex = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
     stride = gridDim().x * blockDim().x
     index      = tindex
@@ -663,217 +666,6 @@ function kernel_∂ρ∂tDDT!(∑∂ρ∂t,  ∇W, pairs, points, η², m₀, DD
     end
     return nothing
 end
-#=
-function ∂ρ∂tDDT2!(∑∂ρ∂t,  ∇W, pairs, points, ranges, h, m₀, δᵩ, c₀, γ, g, ρ₀, ρ, v, ptype) 
-    if length(pairs) != length(∇W) error("Length shoul be equal") end
-
-    gpukernel = @cuda launch=false kernel_∂ρ∂tDDT2!(∑∂ρ∂t,  ∇W, pairs, points, ranges, h, m₀, δᵩ, c₀, γ, g, ρ₀, ρ, v, ptype) 
-    config = launch_configuration(gpukernel.fun)
-    Nx = length(ranges)
-    maxThreads = config.threads
-    Tx  = min(maxThreads, Nx)
-    Bx  = cld(Nx, Tx)
-    CUDA.@sync gpukernel(∑∂ρ∂t, ∇W, pairs, points, ranges, h, m₀, δᵩ, c₀, γ, g, ρ₀, ρ, v, ptype; threads = Tx, blocks = Bx)
-end
-function kernel_∂ρ∂tDDT2!(∑∂ρ∂t,  ∇W, pairs, points, ranges, h, m₀, δᵩ, c₀, γ, g, ρ₀, ρ, v, ptype) 
-    index  = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
-    stride = gridDim().x * blockDim().x
-    #s      = index * (stride - 1) + index
-    #e      = stride - 1
-    # move it outside kernel
-    γ⁻¹  = 1/γ
-    η²   = (0.1*h)*(0.1*h)
-    Cb    = (c₀ * c₀ * ρ₀) * γ⁻¹
-    DDTgz = ρ₀ * g / Cb
-    DDTkh = 2 * h * δᵩ
-
-    while index <= length(ranges)
-        s, e = ranges[index]
-        for pind in s:e
-        pair  = pairs[index]
-        pᵢ    = pair[1]; pⱼ = pair[2]
-        if pᵢ > 0 # && !(isboundary[pᵢ] && isboundary[pᵢ]) 
-            xᵢ    = points[pᵢ]
-            xⱼ    = points[pⱼ]
-            Δx    = (xᵢ[1] - xⱼ[1], xᵢ[2] - xⱼ[2])
-            r²    = Δx[1]^2 + Δx[2]^2 
-            # for timestep Δt½ d != actual range
-            # one way - not calculate values out of 2h
-            # if r² > (2h)^2 return nothing end
-            #=
-            Cb = (c₀ * c₀ * ρ₀) * γ⁻¹
-            Pᴴ =  ρ₀ * g * z
-            ᵸᵀᴴ
-            =#
-            ρᵢ    = ρ[pᵢ]
-            ρⱼ    = ρ[pⱼ]
-
-            Δv    = (v[pᵢ][1] - v[pⱼ][1], v[pᵢ][2] - v[pⱼ][2])
-
-            ∇Wᵢⱼ  = ∇W[index]
-            #=
-            z  = Δx[2]
-            Cb = (c₀ * c₀ * ρ₀) * γ⁻¹
-            Pᴴ =  ρ₀ * g * z
-            ρᴴ =  ρ₀ * (((Pᴴ + 1)/Cb)^γ⁻¹ - 1)
-            ψ  = 2 * (ρᵢ - ρⱼ) * Δx / r²
-            =#
-            dot3  = -(Δx[1] * ∇Wᵢⱼ[1] + Δx[2] * ∇Wᵢⱼ[2]) #  - Δx ⋅ ∇Wᵢⱼ
-
-            # as actual range at timestep Δt½  may be greateg  - some problems can be here
-            if 1 + DDTgz * Δx[2] < 0 || 1 - DDTgz * Δx[2] < 0 return nothing end
-            
-            m₀dot     = m₀ * (Δv[1] * ∇Wᵢⱼ[1] + Δv[2] * ∇Wᵢⱼ[2])  #  Δv ⋅ ∇Wᵢⱼ
-            ∑∂ρ∂ti = ∑∂ρ∂tj = m₀dot
-
-            if ptype[pᵢ] >= 1
-                drhopvp = ρ₀ * powfancy7th(1 + DDTgz * Δx[2], γ⁻¹, γ) - ρ₀ ## << CHECK
-                visc_densi = DDTkh * c₀ * (ρⱼ - ρᵢ - drhopvp) / (r² + η²)
-                delta_i    = visc_densi * dot3 * m₀ / ρⱼ
-                ∑∂ρ∂ti    += delta_i 
-            end
-            CUDA.@atomic ∑∂ρ∂t[pᵢ] += ∑∂ρ∂ti 
-
-            if ptype[pⱼ] >= 1
-                drhopvn = ρ₀ * powfancy7th(1 - DDTgz * Δx[2], γ⁻¹, γ) - ρ₀
-                visc_densi = DDTkh * c₀ * (ρᵢ - ρⱼ - drhopvn) / (r² + η²)
-                delta_j    = visc_densi * dot3 * m₀ / ρᵢ
-                ∑∂ρ∂tj    += delta_j 
-            end
-            CUDA.@atomic ∑∂ρ∂t[pⱼ] += ∑∂ρ∂tj
-            
-            #=
-            if isnan(delta_j) || isnan(m₀dot)  || isnan(ρᵢ) || isnan(ρⱼ) 
-                @cuprintln "kernel_DDT 1 isnan dx1 = $(Δx[1]) , dx2 = $(Δx[2]) rhoi = $ρᵢ , dot3 = $dot3 , visc_densi = $visc_densi drhopvn = $drhopvn $(∇W[1]) $(Δv[1])"
-                error() 
-            end
-            if isinf(delta_j) || isinf(m₀dot)  || isinf(delta_i) 
-                @cuprintln "kernel_DDT 2 inf: dx1 = $(Δx[1]) , dx2 = $(Δx[2]) rhoi = $ρᵢ , rhoj = $ρⱼ , dot3 = $dot3 ,  delta_i = $delta_i , delta_j = $delta_j , drhopvn = $drhopvn , visc_densi = $visc_densi , $(∇W[1]) , $(Δv[1])"
-                error() 
-            end
-            =#
-            #mlfac = MotionLimiter[pᵢ] * MotionLimiter[pⱼ]
-            #=
-            if isnan(∑∂ρ∂tval1) || isnan(∑∂ρ∂tval2) || abs(∑∂ρ∂tval1) >  10000000 || abs(∑∂ρ∂tval2) >  10000000
-                @cuprintln "kernel DDT: drhodti = $∑∂ρ∂ti drhodtj = $∑∂ρ∂tj, dx1 = $(Δx[1]), dx2 = $(Δx[2]) rhoi = $ρᵢ, rhoj = $ρⱼ, dot3 = $dot3, visc_densi = $visc_densi, drhopvn = $drhopvn, dw = $(∇W[1]),  dv = $(Δv[1])"
-                error() 
-            end
-            =#
-            
-        end
-        index += stride
-        end
-    end
-    return nothing
-end
-=#
-#####################################################################
-"""
-    
-    ∂Π∂t!(∑∂Π∂t, ∇W, pairs, points, h, ρ, α, v, c₀, m₀)
-
-
-Compute ∂Π∂t - artificial viscosity. Add to `∑∂Π∂t`
-
-```math
-
-\\Pi_{ij} = \\begin{cases} \\frac{- \\alpha \\overline{c}_{ij} \\mu_{ij} + \\beta \\mu_{ij}^2 }{\\overline{\\rho}_{ij}} &  \\textbf{v}_{ij}\\cdot \\textbf{r}_{ij} < 0 \\\\ 0 &  otherwise \\end{cases}
-
-\\\\
-\\\\
-
-\\mu_{ij} = \\frac{h \\textbf{v}_{ij}\\cdot \\textbf{r}_{ij}}{r_{ij}^2 + \\eta^2}
-
-\\\\
-\\\\
-
-\\overline{c}_{ij}  = \\frac{c_i + c_j}{2}
-
-\\\\
-\\\\
-
-\\overline{\\rho}_{ij} = \\frac{\\rho_i + \\rho_j}{2}
-
-\\\\
-\\\\
-
-\\beta = 0
-
-\\c_{ij} = c_0
-
-\\m_i = m_j = m_0
-
-```
-
-Artificial viscosity part of momentum equation. 
-
-```math
-
-\\frac{\\partial \\textbf{v}_i}{\\partial t} = - \\sum  m_j \\Pi_{ij} \\nabla_i W_{ij}
-```
-
-J. Monaghan, Smoothed Particle Hydrodynamics, “Annual Review of Astronomy and Astrophysics”, 30 (1992), pp. 543-574.
-
-"""
-function ∂Π∂t!(∑∂Π∂t, ∇W, pairs, points, h, ρ, α, v, c₀, m₀, ptype; minthreads::Int = 1024) 
-    
-    η²    = (0.1 * h) * (0.1 * h)
-    gpukernel = @cuda launch=false kernel_∂Π∂t!(∑∂Π∂t, ∇W, pairs, points, h, η², ρ, α, v, c₀, m₀, ptype) 
-    config = launch_configuration(gpukernel.fun)
-    Nx = length(pairs)
-    maxThreads = config.threads
-    Tx  = min(minthreads, maxThreads, Nx)
-    Bx = cld(Nx, Tx)
-    CUDA.@sync gpukernel(∑∂Π∂t, ∇W, pairs, points, h, η², ρ, α, v, c₀, m₀, ptype; threads = Tx, blocks = Bx)
-end
-function kernel_∂Π∂t!(∑∂Π∂t, ∇W, pairs, points, h, η², ρ, α, v, c₀, m₀, ptype) 
-    index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
-
-    if index <= length(pairs)
-        pair  = pairs[index]
-        pᵢ    = pair[1]; pⱼ = pair[2]
-        if pᵢ != 0 && ptype[pᵢ] > 0 && ptype[pⱼ] > 0
-            xᵢ    = points[pᵢ]
-            xⱼ    = points[pⱼ]
-            Δx    = (xᵢ[1] - xⱼ[1], xᵢ[2] - xⱼ[2])
-            r²    = Δx[1]^2 + Δx[2]^2 
-            # for timestep Δt½ d != actual range
-            # one way - not calculate values out of 2h
-            # if r² > (2h)^2 return nothing end
-            ρᵢ    = ρ[pᵢ]
-            ρⱼ    = ρ[pⱼ]
-            #=
-            if isnan(ρᵢ) || iszero(ρᵢ) || ρᵢ < 0.001 || isnan(ρⱼ) || iszero(ρⱼ) || ρⱼ < 0.001
-                @cuprintln "kernel Π: index =  $index, rhoi = $ρᵢ, rhoi = $ρⱼ, dx = $Δx, r =  $r², pair = $pair"
-                error() 
-            end
-            =#
-            Δv    = (v[pᵢ][1] - v[pⱼ][1], v[pᵢ][2] - v[pⱼ][2])
-            ρₘ     = (ρᵢ + ρⱼ) * 0.5
-            ∇Wᵢⱼ   = ∇W[index]
-            cond   = Δv[1] * Δx[1] +  Δv[2] * Δx[2] 
-
-            if cond < 0
-                Δμ   = h * cond / (r² + η²)
-                ΔΠ   =  (-α * c₀ * Δμ) / ρₘ
-                ΔΠm₀∇W = (-ΔΠ * m₀ * ∇Wᵢⱼ[1], -ΔΠ * m₀ * ∇Wᵢⱼ[2])
-                #=
-                if isnan(ΔΠm₀∇W[1])
-                    @cuprintln "kernel Π: Π = $ΔΠ ,  W = $(∇W[1])"
-                    error() 
-                end
-                =#
-                ∑∂Π∂tˣ = ∑∂Π∂t[1]
-                ∑∂Π∂tʸ = ∑∂Π∂t[2]   
-                CUDA.@atomic ∑∂Π∂tˣ[pᵢ] += ΔΠm₀∇W[1]
-                CUDA.@atomic ∑∂Π∂tʸ[pᵢ] += ΔΠm₀∇W[2]
-                CUDA.@atomic ∑∂Π∂tˣ[pⱼ] -= ΔΠm₀∇W[1]
-                CUDA.@atomic ∑∂Π∂tʸ[pⱼ] -= ΔΠm₀∇W[2]
-            end
-        end
-    end
-    return nothing
-end
 #####################################################################
 """
     pressure(ρ, c₀, γ, ρ₀)
@@ -934,53 +726,37 @@ end
 #####################################################################
 """
     
-    ∂v∂t!(∑∂v∂t,  ∇Wₙ, pairs, m, ρ, c₀, γ, ρ₀) 
+    ∂v∂t!(∑∂v∂t,  ∇W, pairs, m₀, ρ, c₀, γ, ρ₀) 
 
-The momentum equation (without dissipation).
+The momentum equation (without dissipation and gravity). *Add to `∑∂v∂t`.*
 
 
 \\frac{\\partial \\textbf{v}_i}{\\partial t} = - \\sum  m_j \\left( \\frac{p_i}{\\rho^2_i} + \\frac{p_j}{\\rho^2_j} \\right) \\nabla_i W_{ij}
 
 
 """
-function ∂v∂t!(∑∂v∂t,  ∇W, P, pairs, m, ρ, ptype; minthreads::Int = 1024) 
-    gpukernel = @cuda launch=false kernel_∂v∂t!(∑∂v∂t,  ∇W, P, pairs, m, ρ, ptype) 
+function ∂v∂t!(∑∂v∂t,  ∇W, P, pairs, m₀, ρ, ptype; minthreads::Int = 1024) 
+    gpukernel = @cuda launch=false kernel_∂v∂t!(∑∂v∂t,  ∇W, P, pairs, m₀, ρ, ptype) 
     config = launch_configuration(gpukernel.fun)
     Nx = length(pairs)
     maxThreads = config.threads
     Tx  = min(minthreads, maxThreads, Nx)
     Bx = cld(Nx, Tx)
-    CUDA.@sync gpukernel(∑∂v∂t,  ∇W, P, pairs, m, ρ, ptype; threads = Tx, blocks = Bx)
+    CUDA.@sync gpukernel(∑∂v∂t,  ∇W, P, pairs, m₀, ρ, ptype; threads = Tx, blocks = Bx)
 end
-function kernel_∂v∂t!(∑∂v∂t, ∇W, P, pairs, m, ρ, ptype) 
+function kernel_∂v∂t!(∑∂v∂t, ∇W, P, pairs, m₀, ρ, ptype) 
     index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
     if index <= length(pairs)
         pair  = pairs[index]
         pᵢ    = pair[1]; pⱼ = pair[2]
         if pᵢ != 0 && ptype[pᵢ] >= 0 && ptype[pⱼ] >= 0
-
             ρᵢ    = ρ[pᵢ]
             ρⱼ    = ρ[pⱼ]
-            
             Pᵢ    = P[pᵢ]
             Pⱼ    = P[pⱼ]
             ∇Wᵢⱼ  = ∇W[index]
-
             Pfac  = (Pᵢ + Pⱼ) / (ρᵢ * ρⱼ)
-
-            ∂v∂t  = (- m * Pfac * ∇Wᵢⱼ[1], - m * Pfac * ∇Wᵢⱼ[2])
-            
-            #=
-            if isnan(∂v∂t[1])
-                @cuprintln "kernel dvdt: rhoi = $ρᵢ , Pi =  $Pᵢ , m = $m , Pfac = $Pfac , W1 = $(∇W[1])"
-                error() 
-            end
-            if isnan(ρᵢ) || iszero(ρᵢ) || ρᵢ < 0.001 || isnan(ρⱼ) || iszero(ρⱼ) || ρⱼ < 0.001
-                @cuprintln "kernel update rho: index =  $index , rhoi = $ρᵢ , rhoi = $ρⱼ, dpdt =  $(∑∂v∂t[index]), pair = $pair"
-                error() 
-            end
-            =#
-
+            ∂v∂t  = (- m₀ * Pfac * ∇Wᵢⱼ[1], - m₀ * Pfac * ∇Wᵢⱼ[2])
             ∑∂v∂tˣ = ∑∂v∂t[1]
             ∑∂v∂tʸ = ∑∂v∂t[2]   
             CUDA.@atomic ∑∂v∂tˣ[pᵢ] +=  ∂v∂t[1]
@@ -992,41 +768,191 @@ function kernel_∂v∂t!(∑∂v∂t, ∇W, P, pairs, m, ρ, ptype)
     return nothing
 end
 #####################################################################
-
 """
     
-    completed_∂vᵢ∂t!(∑∂v∂t, ∑∂Π∂t,  gvec)  
+    ∂v∂t_av!(∑∂v∂t, ∇W, pairs, points, h, ρ, α, v, c₀, m₀)
 
-Add gravity and artificial viscosity to the momentum equation.
+
+Compute artificial viscosity part of ∂v∂t. *Add to `∑∂v∂t`.*
+
+```math
+
+\\Pi_{ij} = \\begin{cases} \\frac{- \\alpha \\overline{c}_{ij} \\mu_{ij} + \\beta \\mu_{ij}^2 }{\\overline{\\rho}_{ij}} &  \\textbf{v}_{ij}\\cdot \\textbf{r}_{ij} < 0 \\\\ 0 &  otherwise \\end{cases}
+
+\\\\
+\\\\
+
+\\mu_{ij} = \\frac{h \\textbf{v}_{ij}\\cdot \\textbf{r}_{ij}}{r_{ij}^2 + \\eta^2}
+
+\\\\
+\\\\
+
+\\overline{c}_{ij}  = \\frac{c_i + c_j}{2}
+
+\\\\
+\\\\
+
+\\overline{\\rho}_{ij} = \\frac{\\rho_i + \\rho_j}{2}
+
+\\\\
+\\\\
+
+\\beta = 0
+
+\\c_{ij} = c_0
+
+\\m_i = m_j = m_0
+
+```
+
+Artificial viscosity part of momentum equation. 
+
+```math
+
+\\frac{\\partial \\textbf{v}_i}{\\partial t} = - \\sum  m_j \\Pi_{ij} \\nabla_i W_{ij}
+```
+
+J. Monaghan, Smoothed Particle Hydrodynamics, “Annual Review of Astronomy and Astrophysics”, 30 (1992), pp. 543-574.
+
 """
-function completed_∂v∂t!(∑∂v∂t, ∑∂Π∂t,  gvec) 
-    if length(∑∂v∂t[1]) != length(∑∂Π∂t[1]) error("Wrong length") end
-    gpukernel = @cuda launch=false kernel_completed_∂v∂t!(∑∂v∂t, ∑∂Π∂t,  gvec) 
+function ∂v∂t_av!(∑∂v∂t, ∇W, pairs, points, h, ρ, α, v, c₀, m₀, ptype; minthreads::Int = 1024) 
+    
+    η²    = (0.1 * h) * (0.1 * h)
+    gpukernel = @cuda launch=false kernel_∂v∂t_av!(∑∂v∂t, ∇W, pairs, points, h, η², ρ, α, v, c₀, m₀, ptype) 
+    config = launch_configuration(gpukernel.fun)
+    Nx = length(pairs)
+    maxThreads = config.threads
+    Tx  = min(minthreads, maxThreads, Nx)
+    Bx = cld(Nx, Tx)
+    CUDA.@sync gpukernel(∑∂v∂t, ∇W, pairs, points, h, η², ρ, α, v, c₀, m₀, ptype; threads = Tx, blocks = Bx)
+end
+function kernel_∂v∂t_av!(∑∂v∂t, ∇W, pairs, points, h, η², ρ, α, v, c₀, m₀, ptype) 
+    index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
+
+    if index <= length(pairs)
+        pair  = pairs[index]
+        pᵢ    = pair[1]; pⱼ = pair[2]
+        if pᵢ != 0 && ptype[pᵢ] > 0 && ptype[pⱼ] > 0
+            xᵢ    = points[pᵢ]
+            xⱼ    = points[pⱼ]
+            Δx    = (xᵢ[1] - xⱼ[1], xᵢ[2] - xⱼ[2])
+            r²    = Δx[1]^2 + Δx[2]^2 
+            # for timestep Δt½ d != actual range
+            # one way - not calculate values out of 2h
+            # if r² > (2h)^2 return nothing end
+            ρᵢ    = ρ[pᵢ]
+            ρⱼ    = ρ[pⱼ]
+            #=
+            if isnan(ρᵢ) || iszero(ρᵢ) || ρᵢ < 0.001 || isnan(ρⱼ) || iszero(ρⱼ) || ρⱼ < 0.001
+                @cuprintln "kernel Π: index =  $index, rhoi = $ρᵢ, rhoi = $ρⱼ, dx = $Δx, r =  $r², pair = $pair"
+                error() 
+            end
+            =#
+            Δv    = (v[pᵢ][1] - v[pⱼ][1], v[pᵢ][2] - v[pⱼ][2])
+            ρₘ     = (ρᵢ + ρⱼ) * 0.5
+            ∇Wᵢⱼ   = ∇W[index]
+            cond   = Δv[1] * Δx[1] +  Δv[2] * Δx[2] 
+
+            if cond < 0
+                Δμ   = h * cond / (r² + η²)
+                ΔΠ   =  (-α * c₀ * Δμ) / ρₘ
+                ΔΠm₀∇W = (-ΔΠ * m₀ * ∇Wᵢⱼ[1], -ΔΠ * m₀ * ∇Wᵢⱼ[2])
+                #=
+                if isnan(ΔΠm₀∇W[1])
+                    @cuprintln "kernel Π: Π = $ΔΠ ,  W = $(∇W[1])"
+                    error() 
+                end
+                =#
+                ∑∂v∂tˣ = ∑∂v∂t[1]
+                ∑∂v∂tʸ = ∑∂v∂t[2]   
+                CUDA.@atomic ∑∂v∂tˣ[pᵢ] += ΔΠm₀∇W[1]
+                CUDA.@atomic ∑∂v∂tʸ[pᵢ] += ΔΠm₀∇W[2]
+                CUDA.@atomic ∑∂v∂tˣ[pⱼ] -= ΔΠm₀∇W[1]
+                CUDA.@atomic ∑∂v∂tʸ[pⱼ] -= ΔΠm₀∇W[2]
+            end
+        end
+    end
+    return nothing
+end
+#####################################################################
+"""
+    
+    ∂v∂t_visc!(∑∂v∂t,  ∇W, pairs, m, ρ, c₀, γ, ρ₀) 
+
+Compute laminar shear stresse part of ∂v∂t. *Add to `∑∂v∂t`.*
+
+```math
+\\frac{\\partial \\textbf{v}_i}{\\partial t} = \\sum \\frac{m_j}{\\rho_j}  \\left( 2 \\nu_i \\frac{\\textbf{r}_{ij} \\cdot \\nabla_i W_{ij} }{r_{ij}^2} \\right) \\textbf{v}_{ij}
+```
+"""
+function ∂v∂t_visc!(∑∂v∂t, ∇W, v, ρ, points, pairs, h, m₀, 𝜈, ptype; minthreads::Int = 1024) 
+    η²    = (0.1 * h) * (0.1 * h)
+    gpukernel = @cuda launch=false kernel_∂v∂t_visc!(∑∂v∂t, ∇W, v, ρ, points, pairs, η², m₀, 𝜈, ptype) 
+    config = launch_configuration(gpukernel.fun)
+    Nx = length(pairs)
+    maxThreads = config.threads
+    Tx  = min(minthreads, maxThreads, Nx)
+    Bx = cld(Nx, Tx)
+    CUDA.@sync gpukernel(∑∂v∂t, ∇W, v, ρ, points, pairs, η², m₀, 𝜈, ptype; threads = Tx, blocks = Bx)
+end
+function kernel_∂v∂t_visc!(∑∂v∂t, ∇W, v, ρ, points, pairs, η², m₀, 𝜈, ptype) 
+    index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
+    if index <= length(pairs)
+        pair  = pairs[index]
+        pᵢ    = pair[1]; pⱼ = pair[2]
+        if pᵢ != 0 && ptype[pᵢ] > 0 && ptype[pⱼ] > 0
+            ρᵢ    = ρ[pᵢ]
+            ρⱼ    = ρ[pⱼ]
+            xᵢ    = points[pᵢ]
+            xⱼ    = points[pⱼ]
+            Δx    = (xᵢ[1] - xⱼ[1], xᵢ[2] - xⱼ[2])
+            r²    = Δx[1]^2 + Δx[2]^2 
+            Δv    = (v[pᵢ][1] - v[pⱼ][1], v[pᵢ][2] - v[pⱼ][2])
+            ∇Wᵢⱼ  = ∇W[index]
+
+            𝜈term = 4𝜈 * m₀ * (Δx[1] * ∇Wᵢⱼ[1] + Δx[2] * ∇Wᵢⱼ[2] ) / ((ρᵢ + ρⱼ) * (r² + η²))  
+
+            ∂v∂t  = (𝜈term * Δv[1], 𝜈term * Δv[2])
+            ∑∂v∂tˣ = ∑∂v∂t[1]
+            ∑∂v∂tʸ = ∑∂v∂t[2]   
+            CUDA.@atomic ∑∂v∂tˣ[pᵢ] +=  ∂v∂t[1]
+            CUDA.@atomic ∑∂v∂tʸ[pᵢ] +=  ∂v∂t[2]
+            CUDA.@atomic ∑∂v∂tˣ[pⱼ] -=  ∂v∂t[1]
+            CUDA.@atomic ∑∂v∂tʸ[pⱼ] -=  ∂v∂t[2]
+        end
+    end
+    return nothing
+end
+#####################################################################
+"""
+    
+    ∂v∂t_addgrav!(∑∂v∂t, gvec)  
+
+Add gravity to the momentum equation.
+"""
+function ∂v∂t_addgrav!(∑∂v∂t, gvec) 
+    gpukernel = @cuda launch=false kernel_∂v∂t_addgrav!(∑∂v∂t, gvec) 
     config = launch_configuration(gpukernel.fun)
     Nx = length(∑∂v∂t[1])
     maxThreads = config.threads
     Tx  = min(maxThreads, Nx)
     Bx = cld(Nx, Tx)
-    CUDA.@sync gpukernel(∑∂v∂t, ∑∂Π∂t,  gvec; threads = Tx, blocks = Bx)
+    CUDA.@sync gpukernel(∑∂v∂t, gvec; threads = Tx, blocks = Bx)
 end
-function kernel_completed_∂v∂t!(∑∂v∂t, ∑∂Π∂t,  gvec) 
+function kernel_∂v∂t_addgrav!(∑∂v∂t, gvec) 
     index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
     if index <= length(∑∂v∂t[1])
-        #∑∂v∂t[index, 1] +=  ∑∂Π∂t[index, 1] - gvec[1] #* gfac[index]
-        #∑∂v∂t[index, 2] +=  ∑∂Π∂t[index, 2] - gvec[2] #* gfac[index]
         ∑∂v∂tˣ = ∑∂v∂t[1]
         ∑∂v∂tʸ = ∑∂v∂t[2]
-        ∑∂Π∂tˣ = ∑∂Π∂t[1]
-        ∑∂Π∂tʸ = ∑∂Π∂t[2] 
-        ∑∂v∂tˣ[index] +=  ∑∂Π∂tˣ[index] - gvec[1] #* gfac[index]
-        ∑∂v∂tʸ[index] +=  ∑∂Π∂tʸ[index] - gvec[2] #* gfac[index]
+        ∑∂v∂tˣ[index] -= gvec[1]
+        ∑∂v∂tʸ[index] -= gvec[2]
         
     end
     return nothing
 end
 #####################################################################
 """
-    update_ρ!(ρ, ∑∂ρ∂t, Δt, ρ₀, ptype) 
+    update_ρp∂ρ∂tΔt!(ρ, ∑∂ρ∂t, Δt, ρ₀, ptype) 
 
 Update dencity.
 
@@ -1034,7 +960,7 @@ Update dencity.
 \\rho = \\rho + \\frac{\\partial \\rho}{\\partial t} * \\Delta t
 ```
 """
-function update_ρ!(ρ, ∑∂ρ∂t, Δt, ρ₀, ptype) 
+function update_ρp∂ρ∂tΔt!(ρ, ∑∂ρ∂t, Δt, ρ₀, ptype) 
     if length(ρ) != length(∑∂ρ∂t) error("Wrong length") end
     gpukernel = @cuda launch=false kernel_update_ρ!(ρ, ∑∂ρ∂t, Δt, ρ₀, ptype) 
     config = launch_configuration(gpukernel.fun)
@@ -1101,6 +1027,9 @@ end
 """
     update_xpvΔt!(x, v, Δt, ml) 
 
+```math
+\\textbf{r} = \\textbf{r} +  \\textbf{v} * \\Delta t
+```
 
 """
 function update_xpvΔt!(x, v, Δt) 
@@ -1131,13 +1060,17 @@ end
 #####################################################################
 """
     
-    update_all!(ρ, ρΔt½, v, vΔt½, x, xΔt½, ∑∂ρ∂t, ∑∂v∂t,  Δt, ρ₀, isboundary, ml) 
+    symplectic_update!(ρ, ρΔt½, v, vΔt½, x, xΔt½, ∑∂ρ∂t, ∑∂v∂t,  Δt, ρ₀, isboundary, ml) 
 
+Symplectic Position Verlet scheme.
+
+* Parshikov et al, 2000
+* Leimkuhler and Matthews, 2016
 
 """
-function update_all!(ρ, ρΔt½, v, vΔt½, x, xΔt½, ∑∂ρ∂t, ∑∂v∂t, Δt, cΔx, ρ₀, ptype) 
+function symplectic_update!(ρ, ρΔt½, v, vΔt½, x, xΔt½, ∑∂ρ∂t, ∑∂v∂t, Δt, cΔx, ρ₀, ptype) 
     if length(x) != length(v) error("Wrong length") end
-    gpukernel = @cuda launch=false kernel_update_all!(ρ, ρΔt½, v, vΔt½, x, xΔt½, ∑∂ρ∂t, ∑∂v∂t,  Δt, cΔx, ρ₀, ptype) 
+    gpukernel = @cuda launch=false kernel_symplectic_update!(ρ, ρΔt½, v, vΔt½, x, xΔt½, ∑∂ρ∂t, ∑∂v∂t,  Δt, cΔx, ρ₀, ptype) 
     config = launch_configuration(gpukernel.fun)
     Nx = length(x)
     maxThreads = config.threads
@@ -1145,7 +1078,7 @@ function update_all!(ρ, ρΔt½, v, vΔt½, x, xΔt½, ∑∂ρ∂t, ∑∂v∂
     Bx = cld(Nx, Tx)
     CUDA.@sync gpukernel(ρ, ρΔt½, v, vΔt½, x, xΔt½, ∑∂ρ∂t, ∑∂v∂t, Δt, cΔx, ρ₀, ptype; threads = Tx, blocks = Bx)
 end
-function kernel_update_all!(ρ, ρΔt½, v, vΔt½, x, xΔt½, ∑∂ρ∂t, ∑∂v∂t, Δt, cΔx, ρ₀, ptype) # << rename
+function kernel_symplectic_update!(ρ, ρΔt½, v, vΔt½, x, xΔt½, ∑∂ρ∂t, ∑∂v∂t, Δt, cΔx, ρ₀, ptype) # << rename
     index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
     if index <= length(x)
 
@@ -1297,7 +1230,7 @@ end
     
     dpcreg!(∑Δvdpc, v, ρ, P, pairs, points, sphkernel, l₀, Pmin, Pmax, Δt, λ, dpckernlim) 
 
-Dynamic Particle Collision (DPC) correction.
+Dynamic Particle Collision (DPC) correction. *Replace all values and update `∑Δvdpc`.*
 
 
 ```math
@@ -1393,7 +1326,7 @@ function kernel_dpcreg!(∑Δvdpc, v, ρ, P, pairs, points, sphkernel, wh⁻¹, 
 end
 
 """
-    update_dpcreg!(v, x, ∑Δvdpc, Δt, isboundary) 
+    update_dpcreg!(v, x, ∑Δvdpc, Δt, ptype) 
 
 Update velocity and position.
 """
@@ -1509,20 +1442,21 @@ The XSPH correction.
 
 * Monaghan JJ (1989) On the problem of penetration in particle methods. J Comput Phys. https://doi.org/10.1016/0021-9991(89)90032-6
 
-Carlos Alberto Dutra Fraga Filho, Reflective Boundary Conditions Coupled With the SPH Method for the Three-Dimensional Simulation of Fluid-Structure Interaction With Solid Boundaries
+* Carlos Alberto Dutra Fraga Filho, Reflective Boundary Conditions Coupled With the SPH Method for the Three-Dimensional Simulation of Fluid-Structure Interaction With Solid Boundaries
 """
-function xsphcorr!(∑Δvxsph, v, ρ, W, pairs, m₀)
-    gpukernel = @cuda launch=false kernel_xsphcorr!(∑Δvxsph, v, ρ, W, pairs, m₀) 
+function xsphcorr!(∑Δvxsph, pairs, W, ρ, v, m₀, 𝜀)
+    fill!(∑Δvxsph[1], zero(T))
+    fill!(∑Δvxsph[2], zero(T))
+    gpukernel = @cuda launch=false kernel_xsphcorr!(∑Δvxsph, pairs, W, ρ, v, m₀, 𝜀) 
     config = launch_configuration(gpukernel.fun)
     Nx = length(pairs)
     maxThreads = config.threads
     Tx  = min(maxThreads, Nx)
     Bx = cld(Nx, Tx)
-    CUDA.@sync gpukernel(∑Δvxsph, v, ρ, W, pairs, m₀; threads = Tx, blocks = Bx)
+    CUDA.@sync gpukernel(∑Δvxsph, pairs, W, ρ, v, m₀, 𝜀; threads = Tx, blocks = Bx)
 end
-function kernel_xsphcorr!(∑Δvxsph, v, ρ, W, pairs, m₀) 
+function kernel_xsphcorr!(∑Δvxsph, pairs, W, ρ, v, m₀, 𝜀) 
     index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
-
     if index <= length(pairs)
         pair  = pairs[index]
         pᵢ    = pair[1]; pⱼ = pair[2]
@@ -1530,16 +1464,39 @@ function kernel_xsphcorr!(∑Δvxsph, v, ρ, W, pairs, m₀)
             Δv    = (v[pᵢ][1] - v[pⱼ][1], v[pᵢ][2] - v[pⱼ][2])
             ρᵢ    = ρ[pᵢ]
             ρⱼ    = ρ[pⱼ]
-            
-            xsph  = 2m₀ * W[index] / (ρᵢ + ρⱼ)
+            xsph  = 2m₀ * 𝜀 * W[index] / (ρᵢ + ρⱼ)
             xsphv = (xsph * Δv[1], xsph * Δv[2])
-
             ∑Δvxsphˣ = ∑Δvxsph[1]
             ∑Δvxsphʸ = ∑Δvxsph[2]
             CUDA.@atomic ∑Δvxsphˣ[pᵢ] -=  xsphv[1]
             CUDA.@atomic ∑Δvxsphʸ[pᵢ] -=  xsphv[2]
             CUDA.@atomic ∑Δvxsphˣ[pⱼ] +=  xsphv[1]
             CUDA.@atomic ∑Δvxsphʸ[pⱼ] +=  xsphv[2]
+        end
+    end
+    return nothing
+end
+"""
+    update_xsphcorr!(v, ∑Δvxsph, ptype) 
+
+Update velocity.
+"""
+function update_xsphcorr!(v, ∑Δvxsph, ptype) 
+    gpukernel = @cuda launch=false kernel_update_dpcreg!(v, ∑Δvxsph, ptype) 
+    config = launch_configuration(gpukernel.fun)
+    Nx = length(x)
+    maxThreads = config.threads
+    Tx  = min(maxThreads, Nx)
+    Bx = cld(Nx, Tx)
+    CUDA.@sync gpukernel(v, ∑Δvxsph, ptype; threads = Tx, blocks = Bx)
+end
+function kernel_update_xsphcorr!(v, ∑Δvxsph, ptype) 
+    index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
+    if index <= length(x)
+        if ptype[index] > 0
+            vval = v[index]
+            xsph = ∑Δvxsph[index]
+            v[index] = (vval[1] + xsph[1], vval[2] + xsph[2])
         end
     end
     return nothing
@@ -1557,9 +1514,14 @@ end
 
 The repulsive force exerted by the virtual particle on the fluid particle.
 
+
+```math
+F = D * \\frac{\\left( (\\frac{r_0}{\\textbf{r}_{ij}})^{n_1} - (\\frac{r_0}{\\textbf{r}_{ij}})^{n_2}\\right)}{r_{ij}^2}
+```
 * Rapaport, 2004
 
 n₁ = 12
+
 n₂ = 4
 """
 function fbmolforce!(∑∂v∂t, pairs, points, d, r₀, ptype)
