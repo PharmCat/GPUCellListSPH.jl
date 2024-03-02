@@ -697,7 +697,7 @@ end
 #####################################################################
 """
     
-    pressure!(P, ρ, ρ₀, c₀, γ) 
+    pressure!(P, ρ, c₀, γ, ρ₀, ptype) 
 
 Equation of State in Weakly-Compressible SPH.
 
@@ -730,9 +730,9 @@ end
 
 The momentum equation (without dissipation and gravity). *Add to `∑∂v∂t`.*
 
-
+```math
 \\frac{\\partial \\textbf{v}_i}{\\partial t} = - \\sum  m_j \\left( \\frac{p_i}{\\rho^2_i} + \\frac{p_j}{\\rho^2_j} \\right) \\nabla_i W_{ij}
-
+```
 
 """
 function ∂v∂t!(∑∂v∂t,  ∇W, P, pairs, m₀, ρ, ptype; minthreads::Int = 1024) 
@@ -776,27 +776,22 @@ end
 Compute artificial viscosity part of ∂v∂t. *Add to `∑∂v∂t`.*
 
 ```math
+\\Pi_{ij} = \\begin{cases} \\frac{- \\alpha \\overline{c}_{ij} \\mu_{ij} + \\beta \\mu_{ij}^2 }{\\overline{\\rho}_{ij}} &  \\textbf{v}_{ij} \\cdot \\textbf{r}_{ij} < 0 \\\\ 0 &  otherwise \\end{cases}
+```
 
-\\Pi_{ij} = \\begin{cases} \\frac{- \\alpha \\overline{c}_{ij} \\mu_{ij} + \\beta \\mu_{ij}^2 }{\\overline{\\rho}_{ij}} &  \\textbf{v}_{ij}\\cdot \\textbf{r}_{ij} < 0 \\\\ 0 &  otherwise \\end{cases}
-
-\\\\
-\\\\
-
+```math
 \\mu_{ij} = \\frac{h \\textbf{v}_{ij}\\cdot \\textbf{r}_{ij}}{r_{ij}^2 + \\eta^2}
+```
 
-\\\\
-\\\\
-
+```math
 \\overline{c}_{ij}  = \\frac{c_i + c_j}{2}
+```
 
-\\\\
-\\\\
-
+```math
 \\overline{\\rho}_{ij} = \\frac{\\rho_i + \\rho_j}{2}
+```
 
-\\\\
-\\\\
-
+```math
 \\beta = 0
 
 \\c_{ij} = c_0
@@ -808,7 +803,6 @@ Compute artificial viscosity part of ∂v∂t. *Add to `∑∂v∂t`.*
 Artificial viscosity part of momentum equation. 
 
 ```math
-
 \\frac{\\partial \\textbf{v}_i}{\\partial t} = - \\sum  m_j \\Pi_{ij} \\nabla_i W_{ij}
 ```
 

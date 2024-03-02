@@ -24,6 +24,40 @@ struct Effective  <: SimWorkLoad end
     SPHProblem(system::GPUCellList, h::Float64, H::Float64, sphkernel::AbstractSPHKernel, ρ, v, ptype, ρ₀::Float64, m₀::Float64, Δt::Float64, α::Float64, g::Float64, c₀::Float64, γ, δᵩ::Float64, CFL::Float64; s::Float64 = 0.0)
 
 SPH simulation data structure.
+
+system::GPUCellList{T} - system of particles (position and cells);
+
+dx - dx;
+
+h - smoothing length;
+
+H- kernel support radius (2h);
+
+sphkernel::AbstractSPHKernel - SPH kernel from SPHKernels.jl;
+
+ρ - rho (vector);
+
+v - velocity (vector);
+
+ptype - particle type: 1 - fluid 1; 0 - boundary; -1 boundary hard layer;
+
+ρ₀ - Reference density;
+
+m₀ - nitial mass;
+
+Δt - default Δt;
+
+α - Artificial viscosity alpha constant;
+
+g - gravity constant;
+
+c₀ - speed of sound;
+
+γ - Gamma, 7 for water (used in the pressure equation of state);
+
+δᵩ- Coefficient for density diffusion, typically 0.1;
+
+CFL - CFL number for the simulation.
 """
 mutable struct SPHProblem{T}
     system::GPUCellList
@@ -40,7 +74,6 @@ mutable struct SPHProblem{T}
     ∇W::CuArray                                 # values of kernel gradient for each pair 
     ∑∂v∂t                                       # acceleration (momentum equation)
     ∑∂ρ∂t                                       # rho diffusion - density derivative function (with diffusion)
-    ∑Δvdpc                                      # velocity dynamic particle collision correction 
     ρ::CuArray                                  # rho
     ρΔt½::CuArray                               # rho at t½  
     v::CuArray                                  # velocity
@@ -69,7 +102,8 @@ mutable struct SPHProblem{T}
     dpc_pmin::T     # minimal pressure
     dpc_pmax::T     # maximum pressure
     dpc_λ::T        # λ is a non-dimensional adjusting parameter
-    xsph_𝜀::T
+    # XSPH
+    xsph_𝜀::T       # xsph constant
     function SPHProblem(system::GPUCellList{T}, dx, h::Float64, H::Float64, sphkernel::AbstractSPHKernel, ρ, v, ptype, ρ₀::Float64, m₀::Float64, Δt::Float64, α::Float64, g::Float64, c₀::Float64, γ, δᵩ::Float64, CFL::Float64; s::Float64 = 0.0) where T <: AbstractFloat
 
         dim = length(CUDA.@allowscalar first(system.points))
@@ -82,8 +116,6 @@ mutable struct SPHProblem{T}
         ∑∂ρ∂t   = CUDA.zeros(T, N)
 
         ∑∂v∂t   = Tuple(CUDA.zeros(T, N) for n in 1:dim)
-
-        ∑Δvdpc = Tuple(CUDA.zeros(T, N) for n in 1:dim)
 
         buf     = CUDA.zeros(T, N)
 
@@ -108,7 +140,6 @@ mutable struct SPHProblem{T}
         ∇W, 
         ∑∂v∂t, 
         ∑∂ρ∂t, 
-        ∑Δvdpc, 
         ρ, 
         ρΔt½, 
         v, 
@@ -143,7 +174,7 @@ end
 """
     stepsolve!(prob::SPHProblem, n::Int = 1; timecall = nothing, timestepping = false, timelims = (-Inf, +Inf))
 
-Make n itarations. 
+Make `n` itarations. 
 
 timestepping - call Δt_stepping for adjust Δt
 

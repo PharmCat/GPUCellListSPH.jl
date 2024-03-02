@@ -2,7 +2,9 @@
 
 ## Description
 
-This is concept-project for particle cell neiborhood list and SPH. Based on [AhmedSalih3d](https://github.com/AhmedSalih3d) repo [SPHExample](https://github.com/AhmedSalih3d/SPHExample).
+Smoothed-particle hydrodynamics (SPH) is a computational method used for simulating the mechanics of continuum media, such as solid mechanics and fluid flows. It was developed by Gingold and Monaghan and Lucy in 1977, initially for astrophysical problems. It has been used in many fields of research, including astrophysics, ballistics, volcanology, and oceanography. It is a meshfree Lagrangian method (where the co-ordinates move with the fluid), and the resolution of the method can easily be adjusted with respect to variables such as density. 
+
+This is concept-project for particle cell neiborhood list and SPH on GPU (with CUDA.jl). Based on [AhmedSalih3d](https://github.com/AhmedSalih3d) repo [SPHExample](https://github.com/AhmedSalih3d/SPHExample) with ome new features.
 
 ## Documentation
 

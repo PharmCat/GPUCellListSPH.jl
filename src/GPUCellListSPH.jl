@@ -10,7 +10,11 @@ export GPUCellList, update!, partialupdate!, neighborlist, neighborlistview
 
 export makedf, writecsv
 
-export SPHProblem, stepsolve!, timesolve!, get_points, get_velocity, get_density, get_pressure, get_acceleration, ∑∇W_2d!, ∑W_2d!, ∂ρ∂tDDT!, ∂Π∂t!, ∂v∂t!, dpcreg!, ∂v∂tpF!
+export SPHProblem, stepsolve!, timesolve!, get_points, get_velocity, get_density, get_pressure, get_acceleration
+
+export ∑W_2d!, ∑∇W_2d!, W_2d!, ∇W_2d!
+
+export ∂ρ∂tDDT!, pressure!, ∂v∂t!,  ∂v∂t_av!, ∂v∂t_visc!, ∂v∂t_addgrav!, ∂v∂tpF!, dpcreg!, cspmcorr!, xsphcorr!, fbmolforce!
 
 #include("sphkernels.jl")
 include("gpukernels2d.jl")      # GPU functions for 2d case
