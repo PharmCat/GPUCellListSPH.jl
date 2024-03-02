@@ -10,12 +10,17 @@ This is concept-project for particle cell neiborhood list and SPH on GPU (with C
 
 [![Latest docs](https://img.shields.io/badge/docs-latest-blue.svg)](https://pharmcat.github.io/GPUCellListSPH.jl/dev/)
 
-### Video
+### Video 
 
-[SPH simulation for dam-break problem - with kinematic viscosity](https://www.youtube.com/watch?v=ogktG7Hm8eQ)
+* SPH simulation for dam-break problem - with kinematic viscosity
+
+[![SPH simulation for dam-break problem - with kinematic viscosity](https://www.youtube.com/watch?v=ogktG7Hm8eQ/default.jpg)](https://www.youtube.com/watch?v=ogktG7Hm8eQ)
 
 
-[SPH simulation for dam-break problem (DPC)](https://www.youtube.com/watch?v=IsE6g05ioVI)
+
+* SPH simulation for dam-break problem (DPC)
+
+[![SPH simulation for dam-break problem (DPC)](https://www.youtube.com/watch?v=IsE6g05ioVI/default.jpg)](https://www.youtube.com/watch?v=IsE6g05ioVI)
 
 ## Install
 
