@@ -2,7 +2,7 @@ module GPUCellListSPH
 
 import Base: show
 
-using CUDA, SPHKernels, CSV, DataFrames, WriteVTK, ProgressMeter, StaticArrays, Plots, Roots
+using CUDA, SPHKernels, CSV, DataFrames, WriteVTK, ProgressMeter, StaticArrays, Plots, Roots, LinearAlgebra
 
 import Plots: Animation
 
@@ -17,8 +17,8 @@ export ∑W_2d!, ∑∇W_2d!, W_2d!, ∇W_2d!
 export ∂ρ∂tDDT!, pressure!, ∂v∂t!,  ∂v∂t_av!, ∂v∂t_visc!, ∂v∂t_addgrav!, ∂v∂tpF!, dpcreg!, cspmcorr!, xsphcorr!, fbmolforce!
 
 #include("sphkernels.jl")
-include("gpukernels2d.jl")      # GPU functions for 2d case
-include("gpukernels3d.jl")      # GPU functions for 3d case
+include("gpukernels_cls.jl")      # GPU functions for 2d case
+include("gpukernels_sph.jl")      # GPU functions for 3d case
 #include("gpulistkernels.jl")
 include("celllist.jl")          # Cell List Neighbors Search for GPU
 #include("gpunlist.jl")

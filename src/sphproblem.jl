@@ -59,7 +59,7 @@ c₀ - speed of sound;
 
 CFL - CFL number for the simulation.
 """
-mutable struct SPHProblem{T}
+mutable struct SPHProblem{T, D}
     system::GPUCellList
     dim::Int
     dx::T
@@ -71,14 +71,14 @@ mutable struct SPHProblem{T}
     ∑W::CuArray                                 # sum of kernel values
     ∑∇W                                         # sum of kernel gradients
     W::CuArray                                  # values of kernel gradient for each pair 
-    ∇W::CuArray                                 # values of kernel gradient for each pair 
+    ∇W                                          # values of kernel gradient for each pair 
     ∑∂v∂t                                       # acceleration (momentum equation)
     ∑∂ρ∂t                                       # rho diffusion - density derivative function (with diffusion)
     ρ::CuArray                                  # rho
     ρΔt½::CuArray                               # rho at t½  
-    v::CuArray                                  # velocity
-    vΔt½::CuArray                               # velocity at t½  
-    xΔt½::CuArray                               # coordinates at xΔt½
+    v                                           # velocity
+    vΔt½                              # velocity at t½  
+    xΔt½                                        # coordinates at xΔt½
     P::CuArray                                  # pressure (Equation of State in Weakly-Compressible SPH)
     ptype::CuArray                              # particle type: 1 - fluid 1; 0 - boundary; -1 boundary hard layer 
     ρ₀::T                                 # Reference density
@@ -104,15 +104,29 @@ mutable struct SPHProblem{T}
     dpc_λ::T        # λ is a non-dimensional adjusting parameter
     # XSPH
     xsph_𝜀::T       # xsph constant
-    function SPHProblem(system::GPUCellList{T}, dx, h::Float64, H::Float64, sphkernel::AbstractSPHKernel, ρ, v, ptype, ρ₀::Float64, m₀::Float64, Δt::Float64, α::Float64, g::Float64, c₀::Float64, γ, δᵩ::Float64, CFL::Float64; s::Float64 = 0.0) where T <: AbstractFloat
+    cspmn::Int        # step
+    bound_D::T
+    bound_l::T
+    function SPHProblem(system::GPUCellList{T, D}, dx, h, H, sphkernel::AbstractSPHKernel, ρ, ptype, ρ₀, m₀, Δt, α, c₀, γ, δᵩ, CFL; v = nothing, g = 9.81, s = 0.0) where T <: AbstractFloat where D
 
-        dim = length(CUDA.@allowscalar first(system.points))
-        N   = length(system.points)
+        if isnothing(v) end 
+        dim = D
+        N   = system.n
+        PN  = system.pairsn
+
+        if isnothing(v) v = Tuple(CUDA.zeros(T, N) for n in 1:dim) end 
+
+
+        if length(ρ)     != N error("length(ρ) ($(length(ρ))) != N ($N)") end
+        if length(ptype) != N error("length(ptype) ($(length(ptype))) != N ($N)") end
+        if any(x-> length(x) != N, v) error("length(v) ($(length.(v))) != N ($N)") end
 
         ∑W      = CUDA.zeros(T, N)
         ∑∇W     = Tuple(CUDA.zeros(T, N) for n in 1:dim)
-        W       = CUDA.zeros(T, length(system.pairs))
-        ∇W      = CUDA.fill(zero(NTuple{dim, T}), length(system.pairs))
+        W       = CUDA.zeros(T, system.pairsn)
+        ∇W      = Tuple(CUDA.zeros(T, PN) for n in 1:dim)
+        #∇W      = CUDA.fill(Tuple(zeros(T, dim)), system.pairsn)
+
         ∑∂ρ∂t   = CUDA.zeros(T, N)
 
         ∑∂v∂t   = Tuple(CUDA.zeros(T, N) for n in 1:dim)
@@ -122,11 +136,12 @@ mutable struct SPHProblem{T}
         buf2    = Tuple(CUDA.zeros(T, N) for n in 1:dim)
 
         ρΔt½    = CUDA.deepcopy(ρ)
-        vΔt½    = CUDA.deepcopy(v)
-        xΔt½    = CUDA.deepcopy(system.points)
+        vΔt½    = CUDA.deepcopy.(v)
+        xΔt½    = Tuple(CUDA.deepcopy(system.points[n]) for n in 1:dim)
+
         cΔx     = Tuple(CUDA.zeros(T, N) for n in 1:dim)
         P       = CUDA.zeros(T, N)
-        new{T}(system, 
+        new{T, D}(system, 
         dim, 
         dx,
         h, 
@@ -167,7 +182,10 @@ mutable struct SPHProblem{T}
         1.0, 
         10000.0, 
         0.01,
-        0.0)
+        0.0,
+        15,
+        0.4,
+        2dx)
     end
 end
 
@@ -210,21 +228,19 @@ function _stepsolve!(prob::SPHProblem{T}, n::Int, ::StepByStep; timestepping = f
             updaten += 1 
         end
 
+        for vec in prob.∑∂v∂t fill!(vec, zero(T)) end
 
-        fill!(prob.∑∂v∂t[1], zero(T))
-        fill!(prob.∑∂v∂t[2], zero(T))
-
-
-        if length(prob.∇W) != length(pairs)
-            CUDA.unsafe_free!(prob.∇W)
+        if length(prob.W) != length(pairs)
+            for vec in prob.∇W CUDA.unsafe_free!(vec) end
             CUDA.unsafe_free!(prob.W)
-            prob.∇W =  CUDA.fill((zero(T), zero(Float64)), length(pairs)) # DIM = 2
+            #prob.∇W = CUDA.fill(Tuple(zeros(T, prob.dim)), length(pairs))
+            prob.∇W = Tuple(CUDA.zeros(T, length(pairs)) for n in 1:prob.dim)
             prob.W =  CUDA.fill(zero(T), length(pairs))
         end
         # kernels for each pair
-        W_2d!(prob.W, pairs, x, prob.H⁻¹, prob.sphkernel)
+        sphW!(prob.W, pairs, x, prob.H⁻¹, prob.sphkernel)
         # kernels gradientfor each pair
-        ∇W_2d!(prob.∇W, pairs, x, prob.H⁻¹, prob.sphkernel)
+        sph∇W!(prob.∇W, pairs, x, prob.H⁻¹, prob.sphkernel)
         # density derivative with density diffusion
         ∂ρ∂tDDT!(prob.∑∂ρ∂t, pairs, prob.∇W, prob.ρ, prob.v, x, prob.h, prob.m₀, prob.ρ₀, prob.c₀, prob.γ, prob.g, prob.δᵩ, prob.ptype; minthreads = 256) 
         #  pressure
@@ -255,9 +271,7 @@ function _stepsolve!(prob::SPHProblem{T}, n::Int, ::StepByStep; timestepping = f
         update_xpvΔt!(prob.xΔt½, prob.vΔt½, prob.Δt * 0.5)
 
         # set derivative to zero for Δt½ calc
-
-        fill!(prob.∑∂v∂t[1], zero(T))
-        fill!(prob.∑∂v∂t[2], zero(T))
+        for vec in prob.∑∂v∂t fill!(vec, zero(T)) end
         
 
         # density derivative with density diffusion at  xΔt½ 
@@ -275,7 +289,7 @@ function _stepsolve!(prob::SPHProblem{T}, n::Int, ::StepByStep; timestepping = f
         # add gravity 
         ∂v∂t_addgrav!(prob.∑∂v∂t,gravvec(prob.g, prob.dim))
         #  Boundary forces
-        fbmolforce!(prob.∑∂v∂t, pairs, x, 0.4, 2 * prob.dx, prob.ptype)
+        fbmolforce!(prob.∑∂v∂t, pairs, x, prob.bound_D, prob.bound_l, prob.ptype)
         # add surface tension if s > 0
         if prob.s > 0
             ∂v∂tpF!(prob.∑∂v∂t, pairs, prob.xΔt½, prob.s, prob.h, prob.m₀, prob.ptype) 
@@ -287,19 +301,19 @@ function _stepsolve!(prob::SPHProblem{T}, n::Int, ::StepByStep; timestepping = f
         if prob.dpc_l₀ > 0
             #  pressure
             pressure!(prob.P, prob.ρ, prob.c₀, prob.γ, prob.ρ₀, prob.ptype) 
-            dpcreg!(prob.buf2, prob.v, prob.ρ, prob.P, pairs, x, prob.sphkernel, prob.dpc_l₀, prob.dpc_pmin, prob.dpc_pmax, prob.Δt, prob.dpc_λ, dpckernlim)  
+            dpcreg!(prob.buf2, prob.v, prob.ρ, prob.P, pairs, x, prob.sphkernel, prob.dpc_l₀, prob.dpc_pmin, prob.dpc_pmax, prob.Δt, prob.dpc_λ, dpckernlim, prob.ptype)  
             update_dpcreg!(prob.v, x, prob.buf2, prob.Δt, prob.ptype)
         end
 
         # XSPH correction.
         if prob.xsph_𝜀 > 0
-            xsphcorr!(prob.buf2, prob.pairs, prob.W, prob.ρ, prob.v, prob.m₀, prob.𝜀)
+            xsphcorr!(prob.buf2, pairs, prob.W, prob.ρ, prob.v, prob.m₀, prob.xsph_𝜀, prob.ptype)
             update_xsphcorr!(prob.v, prob.buf2, prob.ptype) 
         end
 
 
         # Density Renormalisation every 15 timesteps
-        if cspmcorrn == 15
+        if prob.cspmn > 0 && cspmcorrn == prob.cspmn
             cspmcorr!(prob.buf2, prob.W, prob.ρ, prob.m₀, pairs, prob.ptype)
             cspmcorrn = 0
         end
@@ -320,10 +334,10 @@ function _stepsolve!(prob::SPHProblem{T}, n::Int, ::StepByStep; timestepping = f
     end
     # update summs and gradiends after bath 
     fill!(prob.∑W, zero(T))
-    fill!(prob.∑∇W[1], zero(T))
-    fill!(prob.∑∇W[2], zero(T))
-    ∑W_2d!(prob.∑W, pairs, x, prob.sphkernel, prob.H⁻¹)
-    ∑∇W_2d!(prob.∑∇W, pairs, x, prob.sphkernel, prob.H⁻¹)
+    for vec in prob.∑∇W fill!(vec, zero(T)) end
+
+    sph∑W!(prob.∑W, pairs, x, prob.sphkernel, prob.H⁻¹, prob.ptype)
+    sph∑∇W!(prob.∑∇W, pairs, x, prob.sphkernel, prob.H⁻¹, prob.ptype)
     updaten, maxcΔxout
 end
 
@@ -366,6 +380,10 @@ end
 
 function get_sumgradw(prob::SPHProblem)
     prob.∑∇W
+end
+
+function get_ptype(prob::SPHProblem)
+    prob.ptype
 end
 
 """
@@ -411,7 +429,7 @@ function timesolve!(prob::SPHProblem; batch = 10, timeframe = 1.0,
     if timelims[2] > prob.CFL * prob.H /3prob.c₀ 
         @warn "Maximum dt limit ($(timelims[2])) > CFL*H/3c₀ ($(prob.CFL * prob.H /3prob.c₀))" 
     end
-    if timestepping timelims = (max(timelims[1], eps()), min(timelims[2], prob.CFL * prob.H /3prob.c₀, prob.Δt)) end
+    if timestepping timelims = (max(timelims[1], eps()), min(timelims[2], prob.CFL * prob.H /3prob.c₀)) end
     if verbose
         println("    Start simulation...")
         println("Timestepping: $timestepping")
@@ -422,31 +440,27 @@ function timesolve!(prob::SPHProblem; batch = 10, timeframe = 1.0,
     end
     nt = prob.etime + writetime
     i  = 0
-    if writetime > 0 && !isnothing(path)
-        expdict                 = Dict()
-        cpupoints               = Array(get_points(prob))
-        coordsarr               = [map(x -> x[i], cpupoints) for i in 1:length(first(cpupoints))]
-        if "Density"      in vtkvars expdict["Density"]      = Array(get_density(prob)) end
-        if "Pressure"     in vtkvars expdict["Pressure"]     = Array(get_pressure(prob)) end
-        if "Acceleration" in vtkvars expdict["Acceleration"] = Array.(get_acceleration(prob)) end
-        if "Velocity" in vtkvars 
-            av                      = Array(get_velocity(prob))
-            expdict["Velocity"]     = permutedims(hcat([map(x -> x[i], av) for i in 1:length(first(av))]...))
-        end
-        if "∑W" in vtkvars expdict["∑W"]           = Array(get_sumw(prob)) end
-        if "∑∇W" in vtkvars expdict["∑∇W"]         = Array.(get_sumgradw(prob)) end
-        if "DPC" in vtkvars expdict["DPC"]         = Array.(get_dpccorr(prob)) end
-       
+    if writetime > 0 && !isnothing(path)       
         if pvc
             pvd = paraview_collection(joinpath(path, "OUTPUT_PVC"))
         else
             pvd = nothing
         end
-        create_vtp_file(joinpath(path, "OUTPUT_"*lpad(i, 5, "0")), coordsarr, expdict, pvd, prob.etime)
+        cpupoints               = Array.(get_points(prob))
+        writevtk(prob, joinpath(path, "OUTPUT_"*lpad(i, 5, "0")), vtkvars, cpupoints; pvd = pvd, writetime = true)
+
     end
     prog = ProgressUnknown(desc = "Calculating...:", spinner=true, showspeed=true)
 
     if anim
+        if prob.dim == 3 
+            if !haskey(plotsettings, :camera) plotsettings[:camera] = (0, 90) end
+            if !haskey(plotsettings, :proj_type) plotsettings[:proj_type] = :persp end
+            if !haskey(plotsettings, :markeralpha) plotsettings[:markeralpha] = 0.2 end
+            if !haskey(plotsettings, :markersize) plotsettings[:markersize] = 2 end
+            if !haskey(plotsettings, :markerstrokealpha) plotsettings[:markerstrokealpha] = 0 end
+        end
+
         animation = Animation()
     end    
 
@@ -460,26 +474,18 @@ function timesolve!(prob::SPHProblem; batch = 10, timeframe = 1.0,
             nt += writetime
 
             if !isnothing(path)
-                expdict                 = Dict()
-                cpupoints               = Array(get_points(prob))
-                coordsarr               = [map(x -> x[i], cpupoints) for i in 1:length(first(cpupoints))]
-                if "Density"      in vtkvars expdict["Density"]      = Array(get_density(prob)) end
-                if "Pressure"     in vtkvars expdict["Pressure"]     = Array(get_pressure(prob)) end
-                if "Acceleration" in vtkvars expdict["Acceleration"] = Array.(get_acceleration(prob)) end
-                 if "Velocity" in vtkvars 
-                    av                      = Array(get_velocity(prob))
-                    expdict["Velocity"]     = permutedims(hcat([map(x -> x[i], av) for i in 1:length(first(av))]...))
-                end
-                if "∑W" in vtkvars expdict["∑W"]           = Array(get_sumw(prob)) end
-                if "∑∇W" in vtkvars expdict["∑∇W"]         = Array.(get_sumgradw(prob)) end
-                if "DPC" in vtkvars expdict["DPC"]         = Array.(get_dpccorr(prob)) end
+                cpupoints = Array.(get_points(prob))
+                writevtk(prob, joinpath(path, "OUTPUT_"*lpad(i, 5, "0")), vtkvars, cpupoints; pvd = pvd, writetime = true)
 
-                create_vtp_file(joinpath(path, "OUTPUT_"*lpad(i, 5, "0")), coordsarr, expdict, pvd, prob.etime)
             end
             if anim
-                ax = map(x->x[1], cpupoints)
-                ay = map(x->x[2], cpupoints) 
-                p = scatter(ax, ay; plotsettings...)
+                if prob.dim == 3
+                    cordarr = [(cpupoints[1][i], cpupoints[2][i], cpupoints[3][i]) for i in 1:length(first(cpupoints))]
+                    sort!(cordarr; by = x-> x[3])
+                    p = scatter(cordarr; plotsettings...)
+                else
+                    p = scatter(cpupoints...; plotsettings...)
+                end
                 if showframe display(p) end
                 frame(animation, p)
             end

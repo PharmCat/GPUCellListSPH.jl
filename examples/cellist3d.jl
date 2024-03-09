@@ -4,19 +4,20 @@ using SPHKernels, WriteVTK
 using Profile
 using PProf
 path         = dirname(@__FILE__)
-fluid_csv    = joinpath(path, "../test/input/FluidPoints_Dp0.02.csv")
-boundary_csv = joinpath(path, "../test/input/BoundaryPoints_Dp0.02.csv")
-DF_POINTS = append!(CSV.File(fluid_csv) |> DataFrame, CSV.File(boundary_csv) |> DataFrame)
-cpupoints = tuple(eachcol(DF_POINTS[!, ["Points:0", "Points:2"]])...)
-#cpupoints = tuple(eachcol(Float32.(DF_POINTS[!, ["Points:0", "Points:2"]]))...)
+fluid_csv    = joinpath(path, "../test/input/3D_DamBreak_Fluid.csv")
+boundary_csv = joinpath(path, "../test/input/3D_DamBreak_Boundary.csv")
 
-dx  = 0.02
-h   = 1.2 * sqrt(2) * dx
+DF_POINTS = append!(CSV.File(fluid_csv) |> DataFrame, CSV.File(boundary_csv) |> DataFrame)
+cpupoints = tuple(eachcol(DF_POINTS[!, ["Points:0", "Points:2", "Points:1"]])...)
+cpupoints = tuple(eachcol(Float32.(DF_POINTS[!, ["Points:0", "Points:2", "Points:1"]]))...)
+
+dx  = 0.0085
+h   = sqrt(3) * dx
 H   = 2h
 h⁻¹ = 1/h
 H⁻¹ = 1/H
 dist = H
-cellsize = (dist, dist)
+cellsize = (dist, dist, dist)
 
 system  = GPUCellList(cpupoints, cellsize, dist)
 

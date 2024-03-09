@@ -6,7 +6,8 @@ path = joinpath(dirname(pathof(GPUCellListSPH)))
 fluid_csv    = joinpath(path, "../test/input/FluidPoints_Dp0.02.csv")
 boundary_csv = joinpath(path, "../test/input/BoundaryPoints_Dp0.02.csv")
 DF_POINTS = append!(CSV.File(fluid_csv) |> DataFrame, CSV.File(boundary_csv) |> DataFrame)
-cpupoints = Tuple.(eachrow(DF_POINTS[!, ["Points:0", "Points:2"]])) # Load particles 
+cpupoints = tuple(eachcol(DF_POINTS[!, ["Points:0", "Points:2"]])...)
+#cpupoints = tuple(eachcol(Float32.(DF_POINTS[!, ["Points:0", "Points:2"]]))...)
 
 dx  = 0.02                  # resolution
 h   = 1.2 * sqrt(2) * dx    # smoothinl length
@@ -27,16 +28,15 @@ cellsize = (dist, dist)           # cell size
 sphkernel    = WendlandC2(Float64, 2) # SPH kernel from SPHKernels.jl
 
 system  = GPUCellList(cpupoints, cellsize, dist)
-N       = length(cpupoints)
+N       = system.n
 ρ       = CUDA.zeros(Float64, N)
 copyto!(ρ, DF_POINTS.Rhop)
 
 ptype   = CUDA.zeros(Int32, N)
 copyto!(ptype, DF_POINTS.ptype)
 
-v       = CUDA.fill((0.0, 0.0), length(cpupoints))
 
-sphprob =  SPHProblem(system, dx, h, H, sphkernel, ρ, v, ptype, ρ₀, m₀, Δt, α, g, c₀, γ, δᵩ, CFL; s = 0.0)
+sphprob =  SPHProblem(system, dx, h, H, sphkernel, ρ, ptype, ρ₀, m₀, Δt, α,  c₀, γ, δᵩ, CFL; s = 0.0)
 
 # batch - number of iteration until check time and vtp
 # timeframe - simulation time
@@ -48,7 +48,8 @@ sphprob.dpc_λ    = 0.025
 sphprob.dpc_pmax = 36000
 timesolve!(sphprob; batch = 100, timeframe = 1.0, writetime = 0.0, path = "D:/vtk/", pvc = true)
 
+
 # timestepping adjust dt
 # time lims for dt
 # now Δt adjust often buggy
-timesolve!(sphprob; batch = 200, timeframe = 3.5, writetime = 0.01, path = "D:/vtk/", pvc = true, timestepping = true, timelims = (eps(), 1e-5)) 
+timesolve!(sphprob; batch = 200, timeframe = 3.5, writetime = 0.01, path = "D:/vtk/", pvc = true, timestepping = true, timelims = (0, 1)) 

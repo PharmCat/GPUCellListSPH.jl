@@ -11,7 +11,6 @@ DF_BOUND.ptype = fill(Int32(1), size(DF_BOUND, 1))
 DF_POINTS = append!(DF_FLUD, DF_BOUND)
 cpupoints = tuple(eachcol(DF_POINTS[!, ["Points:0", "Points:2", "Points:1"]])...)
 cpupoints = tuple(eachcol(Float32.(DF_POINTS[!, ["Points:0", "Points:2", "Points:1"]]))...)
-
 dx  = 0.0085
 h   = sqrt(3dx^2)
 H   = 2h
@@ -40,33 +39,20 @@ copyto!(ptype, DF_POINTS.ptype)
 
 sphprob =  SPHProblem(system, dx, h, H, sphkernel, ρ, ptype, ρ₀, m₀, Δt, α, c₀, γ, δᵩ, CFL; s = 0.0)
 
-stepsolve!(sphprob, 1)
 
-stepsolve!(sphprob, 5000)
+# batch - number of iteration until check time and vtp
+# timeframe - simulation time
+# vtkwritetime - write vtp file each intervalgr()
+# vtkpath - path to vtp files
+# pcx - make paraview collection
+sphprob.dpc_l₀   = 0.0005
+sphprob.dpc_λ    = 0.05
+sphprob.dpc_pmax = 36000
+sphprob.s        = 0.0
+sphprob.𝜈        = 0.0
+sphprob.xsph_𝜀   = 0.0
+sphprob.bound_D  = 0.35
+sphprob.bound_l  = 1.6dx
+plotsettings = Dict(:leg => false, :zlims => (0.3, 0.5))
 
-
-get_points(sphprob)
-
-get_velocity(sphprob)
-
-get_density(sphprob)
-
-get_acceleration(sphprob)
-
-
-@benchmark stepsolve!($sphprob, 100)
-
-#=
-BenchmarkTools.Trial: 2 samples with 1 evaluation.
- Range (min … max):  2.791 s …   2.806 s  ┊ GC (min … max): 0.71% … 0.00%
- Time  (median):     2.799 s              ┊ GC (median):    0.35%
- Time  (mean ± σ):   2.799 s ± 10.694 ms  ┊ GC (mean ± σ):  0.35% ± 0.50%
-
-  █                                                       █  
-  █▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁█ ▁
-  2.79 s         Histogram: frequency by time        2.81 s <
-
- Memory estimate: 76.60 MiB, allocs estimate: 1484501.
-=#
-
-#@benchmark stepsolve!($sphprob, 1; simwl = GPUCellListSPH.Effective())
+timesolve!(sphprob; batch = 16, timeframe = 4.0, writetime = 0.001, path = "D:/vtk/", pvc = true)

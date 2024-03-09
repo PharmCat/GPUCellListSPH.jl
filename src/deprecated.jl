@@ -448,3 +448,52 @@ function ∂v∂t!(∑∂v∂t,  ∇Wₙ, cellcounter, pairs, points, m, ρ, c�
     CUDA.@sync gpukernel(∑∂v∂t,  ∇Wₙ, cellcounter, pairs, points, m, ρ, c₀, γ, ρ₀; threads = threads, blocks = blocks)
 end
 =#
+#=
+function ∂ρ∂tDDT2!(∑∂ρ∂t, buff, pairs, ∇W, h, m₀, ρ₀, c₀, γ, g, δᵩ, ptype; minthreads::Int = 1024) 
+    η²    = (0.1*h)*(0.1*h)
+    γ⁻¹   = 1/γ
+    DDTkh = 2 * h * δᵩ * c₀
+    Cb    = (c₀ * c₀ * ρ₀) * γ⁻¹
+    DDTgz = ρ₀ * g / Cb
+
+    gpukernel = @cuda launch=false kernel_∂ρ∂tDDT2!(∑∂ρ∂t, buff, pairs, ∇W,  η², m₀, ρ₀, γ, γ⁻¹, DDTkh, DDTgz, ptype) 
+    config = launch_configuration(gpukernel.fun)
+    Nx = length(∇W)
+    maxThreads = config.threads
+    Tx  = min(minthreads, maxThreads, Nx)
+    Bx  = cld(Nx, Tx)
+    CUDA.@sync gpukernel(∑∂ρ∂t, buff, pairs, ∇W,  η², m₀, ρ₀, γ, γ⁻¹, DDTkh, DDTgz, ptype; threads = Tx, blocks = Bx)
+end
+function kernel_∂ρ∂tDDT2!(∑∂ρ∂t, buff, pairs, ∇W,  η², m₀, ρ₀, γ, γ⁻¹, DDTkh, DDTgz, ptype) 
+    index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
+
+    if index <= length(∇W)
+            pair  = pairs[index]
+            pᵢ    = pair[1]; pⱼ = pair[2]
+            Δx    = buff[1][index]
+            Δv    = buff[2][index]
+            r²    = Δx[1]^2 + Δx[2]^2 
+            ρᵢ    = buff[3][index]
+            ρⱼ    = buff[4][index]
+
+            dot3  = -(Δx[1] * ∇W[index][1] + Δx[2] * ∇W[index][2]) #  - Δx ⋅ ∇Wᵢⱼ
+
+            ∑∂ρ∂ti = ∑∂ρ∂tj = m₀ * (Δv[1] * ∇W[index][1] + Δv[2] * ∇W[index][2])  #  Δv ⋅ ∇Wᵢⱼ
+
+            if ptype[pᵢ] >= 1
+                drhopvp = ρ₀ * powfancy7th(1 + DDTgz * Δx[2], γ⁻¹, γ) - ρ₀ 
+                visc_densi = DDTkh  * (ρⱼ - ρᵢ - drhopvp) / (r² + η²)
+                ∑∂ρ∂ti     += visc_densi * dot3 * m₀ / ρⱼ
+            end
+            CUDA.@atomic ∑∂ρ∂t[pᵢ] += ∑∂ρ∂ti 
+
+            if ptype[pⱼ] >= 1
+                drhopvn = ρ₀ * powfancy7th(1 - DDTgz * Δx[2], γ⁻¹, γ) - ρ₀
+                visc_densi = DDTkh  * (ρᵢ - ρⱼ - drhopvn) / (r² + η²)
+                ∑∂ρ∂tj    += visc_densi * dot3 * m₀ / ρᵢ
+            end
+            CUDA.@atomic ∑∂ρ∂t[pⱼ] += ∑∂ρ∂tj 
+    end
+    return nothing
+end
+=#
