@@ -14,8 +14,6 @@ cpupoints = tuple(eachcol(Float32.(DF_POINTS[!, ["Points:0", "Points:2", "Points
 dx  = 0.0085
 h   = sqrt(3) * dx
 H   = 2h
-h⁻¹ = 1/h
-H⁻¹ = 1/H
 dist = H
 cellsize = (dist, dist, dist)
 

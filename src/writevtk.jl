@@ -12,7 +12,19 @@ function create_vtp_file(filename, x, expdict; pvd = nothing, time = nothing)
     end
 end
 
+"""
+    writevtk(prob::SPHProblem, filename, vtkvars, cpupoints = nothing; pvd = nothing, writetime = false)
 
+Create vtp file.
+
+`prob` - SPH problem;
+
+`filename` - path to file;
+
+`vtkvars` - list of variables: `["Density", "Pressure", "Type", "Acceleration", "Velocity", "∑W", "∑∇W", "DPC"]`;
+
+`cpupoints` - coordinates in CPU memory (optional).
+"""
 function writevtk(prob::SPHProblem, filename, vtkvars, cpupoints = nothing; pvd = nothing, writetime = false)
     expdict                 = Dict()
     if isnothing(cpupoints) cpupoints = Array.(get_points(prob)) end

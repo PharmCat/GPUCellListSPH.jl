@@ -60,7 +60,7 @@ c₀ - speed of sound;
 CFL - CFL number for the simulation.
 """
 mutable struct SPHProblem{T, D}
-    system::GPUCellList
+    system::GPUCellList                         # Neigbor list system
     dim::Int
     dx::T
     h::T                                        # smoothing length
@@ -77,7 +77,7 @@ mutable struct SPHProblem{T, D}
     ρ::CuArray                                  # rho
     ρΔt½::CuArray                               # rho at t½  
     v                                           # velocity
-    vΔt½                              # velocity at t½  
+    vΔt½                                        # velocity at t½  
     xΔt½                                        # coordinates at xΔt½
     P::CuArray                                  # pressure (Equation of State in Weakly-Compressible SPH)
     ptype::CuArray                              # particle type: 1 - fluid 1; 0 - boundary; -1 boundary hard layer 
@@ -88,14 +88,15 @@ mutable struct SPHProblem{T, D}
     𝜈::T                                  # kinematic fluid viscosity
     g::T                                  # gravity constant
     c₀::T                                 # speed of sound
-    γ                                           # Gamma, 7 for water (used in the pressure equation of state)
+    γ                                     # Gamma, 7 for water (used in the pressure equation of state)
     s::T                                  # surface tension constant
     δᵩ::T                                 # Coefficient for density diffusion, typically 0.1
     CFL::T                                # CFL number for the simulation 
-    buf::CuArray                                # buffer for dt calculation
-    buf2                                # buffer 
+    buf::CuArray                          # buffer for dt calculation
+    buf2                                  # buffer 
     etime::T                              # simulation time
-    cΔx                                         # cumulative location changes in batch
+    # For neigbors update
+    cΔx                                   # cumulative location changes in batch
     nui::T                                # non update interval, update if maximum(maximum.(abs, prob.cΔx)) > 0.9 * prob.nui  
     # Dynamic Particle Collision (DPC) 
     dpc_l₀::T       # minimal distance
@@ -104,9 +105,11 @@ mutable struct SPHProblem{T, D}
     dpc_λ::T        # λ is a non-dimensional adjusting parameter
     # XSPH
     xsph_𝜀::T       # xsph constant
-    cspmn::Int        # step
-    bound_D::T
-    bound_l::T
+    # CSPM
+    cspmn::Int      # step for CSPM (in batch)
+    # Bound force
+    bound_D::T      # D constant for bounr repulsive force
+    bound_l::T      # length for bounr repulsive force (> sqrt(dim-1)dx)
     function SPHProblem(system::GPUCellList{T, D}, dx, h, H, sphkernel::AbstractSPHKernel, ρ, ptype, ρ₀, m₀, Δt, α, c₀, γ, δᵩ, CFL; v = nothing, g = 9.81, s = 0.0) where T <: AbstractFloat where D
 
         if isnothing(v) end 

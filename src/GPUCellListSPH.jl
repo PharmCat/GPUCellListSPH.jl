@@ -24,6 +24,6 @@ include("celllist.jl")          # Cell List Neighbors Search for GPU
 #include("gpunlist.jl")
 include("sphproblem.jl")        # main SPH solver
 include("writevtk.jl")          # write VTK files
-include("egpukernels.jl")       # reorganized experimental SPH solver
+#include("egpukernels.jl")       # reorganized experimental SPH solver
 include("auxillary.jl")         # loadparticles
 end

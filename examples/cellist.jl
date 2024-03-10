@@ -10,11 +10,9 @@ DF_POINTS = append!(CSV.File(fluid_csv) |> DataFrame, CSV.File(boundary_csv) |> 
 cpupoints = tuple(eachcol(DF_POINTS[!, ["Points:0", "Points:2"]])...)
 #cpupoints = tuple(eachcol(Float32.(DF_POINTS[!, ["Points:0", "Points:2"]]))...)
 
-dx  = 0.02
-h   = 1.2 * sqrt(2) * dx
-H   = 2h
-h⁻¹ = 1/h
-H⁻¹ = 1/H
+dx   = 0.02
+h    = 1.2 * sqrt(2) * dx
+H    = 2h
 dist = H
 cellsize = (dist, dist)
 

@@ -22,47 +22,50 @@ Simple example to try SPH:
 
 ```julia
 
-sing GPUCellListSPH
-using CSV, DataFrames, CUDA, BenchmarkTools, SPHKernels
+using GPUCellListSPH
+using CSV, DataFrames, CUDA, BenchmarkTools
+using SPHKernels, WriteVTK
 
 path = joinpath(dirname(pathof(GPUCellListSPH)))
-
 fluid_csv    = joinpath(path, "../test/input/FluidPoints_Dp0.02.csv")
 boundary_csv = joinpath(path, "../test/input/BoundaryPoints_Dp0.02.csv")
-
 DF_POINTS = append!(CSV.File(fluid_csv) |> DataFrame, CSV.File(boundary_csv) |> DataFrame)
-cpupoints = Tuple.(eachrow(DF_POINTS[!, ["Points:0", "Points:2"]])) # Load particles 
+cpupoints = tuple(eachcol(DF_POINTS[!, ["Points:0", "Points:2"]])...)
+#cpupoints = tuple(eachcol(Float32.(DF_POINTS[!, ["Points:0", "Points:2"]]))...)
 
 dx  = 0.02                  # resolution
 h   = 1.2 * sqrt(2) * dx    # smoothinl length
 H   = 2h                    # kernel support length
-h⁻¹ = 1/h
-H⁻¹ = 1/H
-dist = H                    # distance for neighborlist
-ρ₀  = 1000.0                # reference dencity
-m₀  = ρ₀ * dx * dx          # reference mass
+dist = 1.1H                 # distance for neighborlist
+ρ₀  = 1000.0                # Reference density
+m₀  = ρ₀ * dx * dx          # Reference mass
 α   = 0.01                  # Artificial viscosity constant
 g   = 9.81                  # gravity
 c₀  = sqrt(g * 2) * 20      # Speed of sound
 γ   = 7                     # Gamma costant, used in the pressure equation of state
-Δt  = dt  = 1e-5            # time step
+Δt  = dt  = 1e-5            # Delta time
 δᵩ  = 0.1                   # Coefficient for density diffusion
 CFL = 0.2                   # Courant–Friedrichs–Lewy condition for Δt stepping
-cellsize = (H, H)           # cell size
+cellsize = (dist, dist)     # cell size
 sphkernel    = WendlandC2(Float64, 2) # SPH kernel from SPHKernels.jl
 
 system  = GPUCellList(cpupoints, cellsize, dist)
-N       = length(cpupoints)
+N       = system.n
 ρ       = CUDA.zeros(Float64, N)
 copyto!(ρ, DF_POINTS.Rhop)
+
 ptype   = CUDA.zeros(Int32, N)
 copyto!(ptype, DF_POINTS.ptype)
-v       = CUDA.fill((0.0, 0.0), length(cpupoints))
-
-sphprob =  SPHProblem(system, dx, h, H, sphkernel, ρ, v, ptype, ρ₀, m₀, Δt, α, g, c₀, γ, δᵩ, CFL)
 
 
-timesolve!(sphprob; batch = 10, timeframe = 1.0, writetime = 0.02, path = "D:/vtk/", pvc = true)
+sphprob =  SPHProblem(system, dx, h, H, sphkernel, ρ, ptype, ρ₀, m₀, Δt, α,  c₀, γ, δᵩ, CFL; s = 0.0)
+
+# batch - number of iteration until check time and vtp
+# timeframe - simulation time
+# writetime - write vtp file each interval
+# path - path to vtp files
+# pvc - make paraview collection
+timesolve!(sphprob; batch = 100, timeframe = 1.0, writetime = 0.0, path = "D:/vtk/", pvc = true)
 ```
 
 !!! tip "Save results"
@@ -75,10 +78,11 @@ Other examples available [here](https://github.com/PharmCat/GPUCellListSPH.jl/tr
 This part of `stepsolve!` shows how main quations aplied.
 
 ```julia
+        # v 1.0.1-DEV
         # kernels for each pair
-        W_2d!(prob.W, pairs, x, prob.H⁻¹, prob.sphkernel)
+        sphW!(prob.W, pairs, x, prob.H⁻¹, prob.sphkernel)
         # kernels gradientfor each pair
-        ∇W_2d!(prob.∇W, pairs, x, prob.H⁻¹, prob.sphkernel)
+        sph∇W!(prob.∇W, pairs, x, prob.H⁻¹, prob.sphkernel)
         # density derivative with density diffusion
         ∂ρ∂tDDT!(prob.∑∂ρ∂t, pairs, prob.∇W, prob.ρ, prob.v, x, prob.h, prob.m₀, prob.ρ₀, prob.c₀, prob.γ, prob.g, prob.δᵩ, prob.ptype; minthreads = 256) 
         #  pressure
@@ -106,6 +110,47 @@ This part of `stepsolve!` shows how main quations aplied.
         update_vp∂v∂tΔt!(prob.vΔt½, prob.∑∂v∂t, prob.Δt * 0.5, prob.ptype) 
         # calc x at Δt½
         update_xpvΔt!(prob.xΔt½, prob.vΔt½, prob.Δt * 0.5)
+        # set derivative to zero for Δt½ calc
+        for vec in prob.∑∂v∂t fill!(vec, zero(T)) end
+        # density derivative with density diffusion at  xΔt½ 
+        ∂ρ∂tDDT!(prob.∑∂ρ∂t, pairs, prob.∇W, prob.ρΔt½, prob.vΔt½, prob.xΔt½, prob.h, prob.m₀, prob.ρ₀, prob.c₀, prob.γ, prob.g, prob.δᵩ, prob.ptype; minthreads = 256) 
+        #  pressure
+        pressure!(prob.P, prob.ρΔt½, prob.c₀, prob.γ, prob.ρ₀, prob.ptype) 
+        # momentum equation 
+        ∂v∂t!(prob.∑∂v∂t, prob.∇W, prob.P, pairs,  prob.m₀, prob.ρΔt½, prob.ptype)
+        # add artificial viscosity at xΔt½ 
+        ∂v∂t_av!(prob.∑∂v∂t, prob.∇W, pairs, prob.xΔt½, prob.h, prob.ρΔt½, prob.α, prob.vΔt½, prob.c₀, prob.m₀, prob.ptype)
+        # laminar shear stresse
+        if prob.𝜈 > 0
+            ∂v∂t_visc!(prob.∑∂v∂t, prob.∇W, prob.vΔt½, prob.ρΔt½, prob.xΔt½, pairs, prob.h, prob.m₀, prob.𝜈, prob.ptype)
+        end
+        # add gravity 
+        ∂v∂t_addgrav!(prob.∑∂v∂t,gravvec(prob.g, prob.dim))
+        #  Boundary forces
+        fbmolforce!(prob.∑∂v∂t, pairs, x, prob.bound_D, prob.bound_l, prob.ptype)
+        # add surface tension if s > 0
+        if prob.s > 0
+            ∂v∂tpF!(prob.∑∂v∂t, pairs, prob.xΔt½, prob.s, prob.h, prob.m₀, prob.ptype) 
+        end
+        # update all with symplectic position Verlet scheme
+        symplectic_update!(prob.ρ, prob.ρΔt½, prob.v, prob.vΔt½, x, prob.xΔt½, prob.∑∂ρ∂t, prob.∑∂v∂t, prob.Δt, prob.cΔx, prob.ρ₀, prob.ptype)
+        # Dynamic Particle Collision (DPC) 
+        if prob.dpc_l₀ > 0
+            #  pressure
+            pressure!(prob.P, prob.ρ, prob.c₀, prob.γ, prob.ρ₀, prob.ptype) 
+            dpcreg!(prob.buf2, prob.v, prob.ρ, prob.P, pairs, x, prob.sphkernel, prob.dpc_l₀, prob.dpc_pmin, prob.dpc_pmax, prob.Δt, prob.dpc_λ, dpckernlim, prob.ptype)  
+            update_dpcreg!(prob.v, x, prob.buf2, prob.Δt, prob.ptype)
+        end
+        # XSPH correction.
+        if prob.xsph_𝜀 > 0
+            xsphcorr!(prob.buf2, pairs, prob.W, prob.ρ, prob.v, prob.m₀, prob.xsph_𝜀, prob.ptype)
+            update_xsphcorr!(prob.v, prob.buf2, prob.ptype) 
+        end
+        # Density Renormalisation every 15 timesteps
+        if prob.cspmn > 0 && cspmcorrn == prob.cspmn
+            cspmcorr!(prob.buf2, prob.W, prob.ρ, prob.m₀, pairs, prob.ptype)
+            cspmcorrn = 0
+        end
 ```
 
 ## Docs
@@ -136,28 +181,29 @@ GPUCellListSPH.SPHProblem
 
 Object structure:
 
-```
-    system::GPUCellList
+``` 
+    # v 1.0.1-DEV
+    system::GPUCellList                         # Neigbor list system
     dim::Int
     dx::T
-    h::T                                  # smoothing length
+    h::T                                        # smoothing length
     h⁻¹::T
-    H::T                                  # kernel support radius (2h)
+    H::T                                        # kernel support radius (2h)
     H⁻¹::T
-    sphkernel::AbstractSPHKernel          # SPH kernel from SPHKernels.jl
-    ∑W::CuArray                           # sum of kernel values
-    ∑∇W                                   # sum of kernel gradients
-    W::CuArray                            # values of kernel gradient for each pair 
-    ∇W::CuArray                           # values of kernel gradient for each pair 
-    ∑∂v∂t                                 # acceleration (momentum equation)
-    ∑∂ρ∂t                                 # rho diffusion - density derivative function (with diffusion)
-    ρ::CuArray                            # rho
-    ρΔt½::CuArray                         # rho at t½  
-    v::CuArray                            # velocity
-    vΔt½::CuArray                         # velocity at t½  
-    xΔt½::CuArray                         # coordinates at xΔt½
-    P::CuArray                            # pressure (Equation of State in Weakly-Compressible SPH)
-    ptype::CuArray                        # particle type: 1 - fluid 1; 0 - boundary; -1 boundary hard layer 
+    sphkernel::AbstractSPHKernel                # SPH kernel from SPHKernels.jl
+    ∑W::CuArray                                 # sum of kernel values
+    ∑∇W                                         # sum of kernel gradients
+    W::CuArray                                  # values of kernel gradient for each pair 
+    ∇W                                          # values of kernel gradient for each pair 
+    ∑∂v∂t                                       # acceleration (momentum equation)
+    ∑∂ρ∂t                                       # rho diffusion - density derivative function (with diffusion)
+    ρ::CuArray                                  # rho
+    ρΔt½::CuArray                               # rho at t½  
+    v                                           # velocity
+    vΔt½                                        # velocity at t½  
+    xΔt½                                        # coordinates at xΔt½
+    P::CuArray                                  # pressure (Equation of State in Weakly-Compressible SPH)
+    ptype::CuArray                              # particle type: 1 - fluid 1; 0 - boundary; -1 boundary hard layer 
     ρ₀::T                                 # Reference density
     m₀::T                                 # Initial mass
     Δt::T                                 # default Δt
@@ -172,15 +218,21 @@ Object structure:
     buf::CuArray                          # buffer for dt calculation
     buf2                                  # buffer 
     etime::T                              # simulation time
+    # For neigbors update
     cΔx                                   # cumulative location changes in batch
     nui::T                                # non update interval, update if maximum(maximum.(abs, prob.cΔx)) > 0.9 * prob.nui  
     # Dynamic Particle Collision (DPC) 
-    dpc_l₀::T                             # minimal distance
-    dpc_pmin::T                           # minimal pressure
-    dpc_pmax::T                           # maximum pressure
-    dpc_λ::T                              # λ is a non-dimensional adjusting parameter
+    dpc_l₀::T       # minimal distance
+    dpc_pmin::T     # minimal pressure
+    dpc_pmax::T     # maximum pressure
+    dpc_λ::T        # λ is a non-dimensional adjusting parameter
     # XSPH
-    xsph_𝜀::T                             # xsph constant
+    xsph_𝜀::T       # xsph constant
+    # CSPM
+    cspmn::Int      # step for CSPM (in batch)
+    # Bound force
+    bound_D::T      # D constant for bounr repulsive force
+    bound_l::T      # length for bounr repulsive force (> sqrt(dim-1)dx)
 ```
 
 ### Processing functions

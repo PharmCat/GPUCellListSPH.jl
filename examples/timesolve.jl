@@ -12,19 +12,17 @@ cpupoints = tuple(eachcol(DF_POINTS[!, ["Points:0", "Points:2"]])...)
 dx  = 0.02                  # resolution
 h   = 1.2 * sqrt(2) * dx    # smoothinl length
 H   = 2h                    # kernel support length
-h⁻¹ = 1/h
-H⁻¹ = 1/H
-dist = 1.1H                    # distance for neighborlist
-ρ₀  = 1000.0                 
-m₀  = ρ₀ * dx * dx
+dist = 1.1H                 # distance for neighborlist
+ρ₀  = 1000.0                # Reference density
+m₀  = ρ₀ * dx * dx          # Reference mass
 α   = 0.01                  # Artificial viscosity constant
 g   = 9.81                  # gravity
 c₀  = sqrt(g * 2) * 20      # Speed of sound
 γ   = 7                     # Gamma costant, used in the pressure equation of state
-Δt  = dt  = 1e-5
+Δt  = dt  = 1e-5            # Delta time
 δᵩ  = 0.1                   # Coefficient for density diffusion
 CFL = 0.2                   # Courant–Friedrichs–Lewy condition for Δt stepping
-cellsize = (dist, dist)           # cell size
+cellsize = (dist, dist)     # cell size
 sphkernel    = WendlandC2(Float64, 2) # SPH kernel from SPHKernels.jl
 
 system  = GPUCellList(cpupoints, cellsize, dist)

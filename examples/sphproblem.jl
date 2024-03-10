@@ -1,34 +1,28 @@
 using GPUCellListSPH
 using CSV, DataFrames, CUDA, BenchmarkTools
 using SPHKernels, WriteVTK
-path         = dirname(@__FILE__)
-fluid_csv    = joinpath(path, "../test/input/3D_DamBreak_Fluid_3LAYERS.csv")
-boundary_csv = joinpath(path, "../test/input/3D_DamBreak_Boundary_3LAYERS.csv")
-DF_FLUD       = CSV.File(fluid_csv) |> DataFrame
-DF_FLUD.ptype = fill(Int32(2), size(DF_FLUD, 1))
-DF_BOUND      = CSV.File(boundary_csv) |> DataFrame
-DF_BOUND.ptype = fill(Int32(1), size(DF_BOUND, 1))
-DF_POINTS = append!(DF_FLUD, DF_BOUND)
-cpupoints = tuple(eachcol(DF_POINTS[!, ["Points:0", "Points:2", "Points:1"]])...)
-cpupoints = tuple(eachcol(Float32.(DF_POINTS[!, ["Points:0", "Points:2", "Points:1"]]))...)
 
-dx  = 0.0085
-h   = sqrt(3dx^2)
-H   = 2h
-h⁻¹ = 1/h
-H⁻¹ = 1/H
-dist = 1.1H
-ρ₀  = 1000.0
-m₀  = ρ₀ * dx * dx * dx
-α   = 0.01
-g   = 9.81
-c₀  = sqrt(g * 2) * 20
-γ   = 7
-Δt  = dt  = 1e-5
-δᵩ  = 0.1
-CFL = 0.2
-cellsize = (dist, dist, dist)
-sphkernel    = WendlandC2(Float32, 3)
+path = joinpath(dirname(pathof(GPUCellListSPH)))
+fluid_csv    = joinpath(path, "../test/input/FluidPoints_Dp0.02.csv")
+boundary_csv = joinpath(path, "../test/input/BoundaryPoints_Dp0.02.csv")
+DF_POINTS = append!(CSV.File(fluid_csv) |> DataFrame, CSV.File(boundary_csv) |> DataFrame)
+cpupoints = tuple(eachcol(DF_POINTS[!, ["Points:0", "Points:2"]])...)
+#cpupoints = tuple(eachcol(Float32.(DF_POINTS[!, ["Points:0", "Points:2"]]))...)
+
+dx  = 0.02                  # resolution
+h   = 1.2 * sqrt(2) * dx    # Smoothinl length
+H   = 2h                    # kernel support length
+dist = 1.1H                 # distance for neighborlist
+ρ₀  = 1000.0                # Reference density
+m₀  = ρ₀ * dx * dx          # Reference mass
+α   = 0.01                  # Artificial viscosity constant
+g   = 9.81                  # gravity
+c₀  = sqrt(g * 2) * 20      # Speed of sound
+γ   = 7                     # Gamma costant, used in the pressure equation of state
+Δt  = dt  = 1e-5            # Delta time
+δᵩ  = 0.1                   # Coefficient for density diffusion
+CFL = 0.2                   # Courant–Friedrichs–Lewy condition for Δt stepping
+cellsize = (dist, dist)     # cell size
 
 system  = GPUCellList(cpupoints, cellsize, dist)
 N       = system.n
@@ -56,17 +50,5 @@ get_acceleration(sphprob)
 
 @benchmark stepsolve!($sphprob, 100)
 
-#=
-BenchmarkTools.Trial: 2 samples with 1 evaluation.
- Range (min … max):  2.791 s …   2.806 s  ┊ GC (min … max): 0.71% … 0.00%
- Time  (median):     2.799 s              ┊ GC (median):    0.35%
- Time  (mean ± σ):   2.799 s ± 10.694 ms  ┊ GC (mean ± σ):  0.35% ± 0.50%
-
-  █                                                       █  
-  █▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁█ ▁
-  2.79 s         Histogram: frequency by time        2.81 s <
-
- Memory estimate: 76.60 MiB, allocs estimate: 1484501.
-=#
 
 #@benchmark stepsolve!($sphprob, 1; simwl = GPUCellListSPH.Effective())

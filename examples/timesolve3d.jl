@@ -9,13 +9,12 @@ DF_FLUD.ptype = fill(Int32(2), size(DF_FLUD, 1))
 DF_BOUND      = CSV.File(boundary_csv) |> DataFrame
 DF_BOUND.ptype = fill(Int32(1), size(DF_BOUND, 1))
 DF_POINTS = append!(DF_FLUD, DF_BOUND)
-cpupoints = tuple(eachcol(DF_POINTS[!, ["Points:0", "Points:2", "Points:1"]])...)
+#cpupoints = tuple(eachcol(DF_POINTS[!, ["Points:0", "Points:2", "Points:1"]])...)
 cpupoints = tuple(eachcol(Float32.(DF_POINTS[!, ["Points:0", "Points:2", "Points:1"]]))...)
+
 dx  = 0.0085
 h   = sqrt(3dx^2)
 H   = 2h
-h⁻¹ = 1/h
-H⁻¹ = 1/H
 dist = 1.1H
 ρ₀  = 1000.0
 m₀  = ρ₀ * dx * dx * dx

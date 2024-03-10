@@ -14,8 +14,6 @@ cpupoints = tuple(eachcol(Float32.(DF_POINTS[!, ["Points:0", "Points:2", "Points
 dx  = 0.0085
 h   = sqrt(3dx^2)
 H   = 2h
-h⁻¹ = 1/h
-H⁻¹ = 1/H
 dist = 1.1H
 ρ₀  = 1000.0
 m₀  = ρ₀ * dx * dx * dx
@@ -55,15 +53,6 @@ sphprob.bound_D  = 0.35
 sphprob.bound_l  = 1.6dx
 plotsettings = Dict(:leg => false, :zlims => (0.3, 0.5))
 
-timesolve!(sphprob; batch = 16, timeframe = 4.0, writetime = 0.001, path = "D:/vtk/", pvc = true, anim = true, 
+# 3D plotting is very very very very slooooow... ... ... use only for debug purpose...
+timesolve!(sphprob; batch = 16, timeframe = 0.01, writetime = 0.001, path = "D:/vtk/", pvc = true, anim = true, 
 plotsettings = plotsettings)
-
-#cpupoints = Array.(system.points)
-#arr = [(cpupoints[1][i], cpupoints[2][i], cpupoints[3][i]) for i in 1:length(first(cpupoints))]
-#sort!(arr; by = x-> x[3])
-#using Plots
-
-#plotsettings = Dict( :proj_type => :persp, :leg => false, :zlims => (0.2, 0.5),:camera=>(0, 90), :markeralpha => 0.1, :markersize => 2, :markerstrokealpha => 0 )
-
-#scatter(arr; plotsettings...)
-#makedf(sphprob)

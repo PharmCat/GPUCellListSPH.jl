@@ -14,8 +14,6 @@ cpupoints = tuple(eachcol(DF_POINTS[!, ["Points:0", "Points:2", "Points:1"]])...
 dx  = 0.0085
 h   = sqrt(3dx^2)
 H   = 2h
-h⁻¹ = 1/h
-H⁻¹ = 1/H
 dist = 1.1H
 ρ₀  = 1000.0
 m₀  = ρ₀ * dx * dx * dx
@@ -36,7 +34,7 @@ N       = system.n
 copyto!(ρ, DF_POINTS.Rhop)
 ptype   = CUDA.zeros(Int32, N)
 copyto!(ptype, DF_POINTS.ptype)
-v       = CUDA.fill((0.0, 0.0, 0.0), N)
+
 
 sphprob =  SPHProblem(system, dx, h, H, sphkernel, ρ,  ptype, ρ₀, m₀, Δt, α,  c₀, γ, δᵩ, CFL; s = 0.0)
 

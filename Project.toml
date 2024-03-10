@@ -1,7 +1,7 @@
 name = "GPUCellListSPH"
 uuid = "0fae8f6c-cbdc-43f7-8a26-631b812a57c9"
 authors = ["Vladimir Arnautov"]
-version = "1.0.0-DEV"
+version = "1.0.1-DEV"
 
 [deps]
 CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
