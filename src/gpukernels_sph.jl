@@ -1460,11 +1460,11 @@ Dynamic Particle Collision (DPC) correction. *Replace all values and update `∑
 
 ```math
 (v_{ij}^{coll} , \\quad \\phi_{ij}) = \\begin{cases} (\\frac{\\textbf{v}_{ij}\\cdot \\textbf{r}_{ij}}{r_{ij}^2 + \\eta^2}\\textbf{r}_{ji}, \\quad 0) & \\textbf{v}_{ij}\\cdot \\textbf{r}_{ij} < 0 \\\\ (0, \\quad 1) &  otherwise \\end{cases}
+```
 
 ```math
 p_{ij}^b = \\tilde{p}_{ij} \\chi_{ij} 
 ```
-
 
 ```math
 \\tilde{p}_{ij} = max(min(\\lambda |p_i + p_j|, \\lambda p_{max}), p_{min})
@@ -1728,7 +1728,13 @@ The XSPH correction.
 
 ```math
 
-\\hat{\\textbf{v}_{i}} = - \\epsilon \\sum m_j \\frac{\\textbf{v}_{ij}}{\\overline{\\rho}_{ij}} W_{ij}
+\\hat{\\textbf{v}_{i}} = \\epsilon \\sum m_j \\frac{\\textbf{v}_{ji}}{\\overline{\\rho}_{ij}} W_{ij}
+
+```
+
+```math
+
+\\overline{\\rho}_{ij} = \\frac{\\rho_i + \\rho_j}{2} 
 
 ```
 
@@ -1754,13 +1760,13 @@ function kernel_xsphcorr!(∑Δvxsph, pairs, W, ρ, v, m₀, 𝜀, ptype)
         pair  = pairs[index]
         pᵢ    = pair[1]; pⱼ = pair[2]
         if pᵢ != 0 && ptype[pᵢ] > 1 && ptype[pⱼ] > 1
-            Δv    = getsvec(v, pᵢ) - getsvec(v, pⱼ)
+            Δv    = getsvec(v, pⱼ) - getsvec(v, pᵢ)
             ρᵢ    = ρ[pᵢ]
             ρⱼ    = ρ[pⱼ]
             xsph  = 2m₀ * 𝜀 * W[index] / (ρᵢ + ρⱼ)
             xsphv = Δv * xsph 
-            atomicsubsvec!(∑Δvxsph, xsphv, pᵢ)
-            atomicaddsvec!(∑Δvxsph, xsphv, pⱼ)
+            atomicaddsvec!(∑Δvxsph, xsphv, pᵢ)
+            atomicsubsvec!(∑Δvxsph, xsphv, pⱼ)
             #∑Δvxsphˣ = ∑Δvxsph[1]
             #∑Δvxsphʸ = ∑Δvxsph[2]
             #CUDA.@atomic ∑Δvxsphˣ[pᵢ] -=  xsphv[1]
@@ -1800,28 +1806,32 @@ function kernel_xsphcorr!(∑Δvxsph::NTuple{3, CuDeviceVector{T, 1}}, pairs, W,
 end
 =#
 """
-    update_xsphcorr!(v, ∑Δvxsph, ptype) 
+    update_xsphcorr!(x, ∑Δvxsph, Δt, ptype) 
 
-Update velocity.
+Update position.
+
+```math
+\\textbf{x}_{i}} = \\hat{\\textbf{v}_{i}} * \\Delta  t
+```
 """
-function update_xsphcorr!(v, ∑Δvxsph, ptype) 
-    if length(first(v)) != length(ptype) error("length error") end
-    gpukernel = @cuda launch=false kernel_update_xsphcorr!(v, ∑Δvxsph, ptype) 
+function update_xsphcorr!(x, ∑Δvxsph, Δt, ptype) 
+    if length(first(x)) != length(ptype) error("length error") end
+    gpukernel = @cuda launch=false kernel_update_xsphcorr!(x, ∑Δvxsph, Δt, ptype) 
     config = launch_configuration(gpukernel.fun)
-    Nx = length(first(v))
+    Nx = length(first(x))
     maxThreads = config.threads
     Tx  = min(maxThreads, Nx)
     Bx = cld(Nx, Tx)
-    CUDA.@sync gpukernel(v, ∑Δvxsph, ptype; threads = Tx, blocks = Bx)
+    CUDA.@sync gpukernel(x, ∑Δvxsph, Δt, ptype; threads = Tx, blocks = Bx)
 end
-function kernel_update_xsphcorr!(v, ∑Δvxsph, ptype) 
+function kernel_update_xsphcorr!(x, ∑Δvxsph, Δt, ptype) 
     index = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
-    if index <= length(first(v))
+    if index <= length(first(x))
         if ptype[index] > 1
             #vval = v[index]
             #xsph = (∑Δvxsph[1][index], ∑Δvxsph[2][index])
             #v[index] = (vval[1] + xsph[1], vval[2] + xsph[2])
-            addsvec!(v, getsvec(∑Δvxsph, index), index)
+            addsvec!(x, getsvec(∑Δvxsph, index) * Δt, index)
         end
     end
     return nothing

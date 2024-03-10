@@ -12,7 +12,7 @@ export makedf, writecsv
 
 export SPHProblem, stepsolve!, timesolve!, get_points, get_velocity, get_density, get_pressure, get_acceleration
 
-export ∑W_2d!, ∑∇W_2d!, W_2d!, ∇W_2d!
+export sphW!, sph∇W!, sph∑∇W!, sph∑∇W!
 
 export ∂ρ∂tDDT!, pressure!, ∂v∂t!,  ∂v∂t_av!, ∂v∂t_visc!, ∂v∂t_addgrav!, ∂v∂tpF!, dpcreg!, cspmcorr!, xsphcorr!, fbmolforce!
 

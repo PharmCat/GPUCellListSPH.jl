@@ -16,7 +16,7 @@ dist = 1.1H
 m₀  = ρ₀ * dx * dx
 α   = 0.01
 s   = 0.01
-g = 9.81
+g   = 9.81
 c₀  = sqrt(g * 2) * 20
 γ   = 7
 Δt  = dt  = 1e-5
@@ -39,12 +39,12 @@ sphprob =  SPHProblem(system, dx, h, H, sphkernel, ρ, ptype, ρ₀, m₀, Δt, 
 # vtkwritetime - write vtp file each intervalgr()
 # vtkpath - path to vtp files
 # pcx - make paraview collection
-sphprob.dpc_l₀   = 0.001
+sphprob.dpc_l₀   = 0.0
 sphprob.dpc_λ    = 0.005
 sphprob.dpc_pmax = 36000
-sphprob.s        = 0.01
-sphprob.𝜈        = 0.01
-sphprob.xsph_𝜀   = 0.0005
+sphprob.s        = 0.0
+sphprob.𝜈        = 0.0
+sphprob.xsph_𝜀   = 0.5
 timesolve!(sphprob; batch = 100, timeframe = 1.1, writetime = 0.0025, path = "D:/vtk/", pvc = true, anim = true, 
 plotsettings = Dict(:leg => false, :xlims => (0, 4), :ylims => (0, 3.5)))
 

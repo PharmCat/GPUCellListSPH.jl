@@ -32,7 +32,9 @@ function GPUCellList(points::NTuple{D, AbstractArray{T}}, cellsize, dist; MIN = 
     for i in eachindex(cellsize)                                 # cell size by 2-dim 
         if cellsize[i] < dist 
             @warn "Cell size (dim $i) < dist, cell size set equal dist"
-            cellsize[i] = dist 
+            csa      = collect(cellsize)
+            csa[i]   = dist 
+            cellsize = Tuple(csa)
         end
     end
 

@@ -311,7 +311,7 @@ function _stepsolve!(prob::SPHProblem{T}, n::Int, ::StepByStep; timestepping = f
         # XSPH correction.
         if prob.xsph_𝜀 > 0
             xsphcorr!(prob.buf2, pairs, prob.W, prob.ρ, prob.v, prob.m₀, prob.xsph_𝜀, prob.ptype)
-            update_xsphcorr!(prob.v, prob.buf2, prob.ptype) 
+            update_xsphcorr!(x, prob.buf2, prob.Δt, prob.ptype) 
         end
 
 
@@ -335,7 +335,7 @@ function _stepsolve!(prob::SPHProblem{T}, n::Int, ::StepByStep; timestepping = f
         end
 
     end
-    # update summs and gradiends after bath 
+    # update summs and gradiends after batch 
     fill!(prob.∑W, zero(T))
     for vec in prob.∑∇W fill!(vec, zero(T)) end
 

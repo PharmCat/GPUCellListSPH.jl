@@ -81,7 +81,7 @@ function kernel_fillcells_naive!(celllist, cellpnum, pcell::CuDeviceVector{NTupl
         n = CUDA.@atomic cellpnum[iˣ, iʸ] += 1
         n += 1
         if n <= size(celllist, 1)
-            celllist[n + 1, iˣ, iʸ] = index
+            celllist[n, iˣ, iʸ] = index
         end
     end
     return nothing

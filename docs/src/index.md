@@ -249,11 +249,11 @@ GPUCellListSPH.timesolve!
 ### Main equations 
 
 ```@docs
-GPUCellListSPH.∑W_2d!
+GPUCellListSPH.sph∑W!
 ```
 
 ```@docs
-GPUCellListSPH.∑∇W_2d!
+GPUCellListSPH.sph∑∇W!
 ```
 
 ```@docs

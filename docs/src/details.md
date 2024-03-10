@@ -88,7 +88,7 @@ Monaghan style artificial viscosity:
 
 J. Monaghan, “Smoothed particle hydrodynamics”, Reports on Progress in Physics, 68 (2005), pp. 1703-1759.
 
-### Laminar shear stresse
+### Laminar shear stress
 
 ```math
 \frac{\partial \textbf{v}_i}{\partial t} = \sum \frac{m_j}{\rho_j}  \left( 2 \nu_i \frac{\textbf{r}_{ij} \cdot \nabla_i W_{ij} }{r_{ij}^2} \right) \textbf{v}_{ij}
@@ -133,7 +133,7 @@ Correction to avoid the particles' disordered movement and prevent penetration b
 
 
 ```math
-\hat{\textbf{v}_{i}} = - \epsilon \sum m_j \frac{\textbf{v}_{ij}}{\overline{\rho}_{ij}} W_{ij}
+\hat{\textbf{v}_{i}} = \epsilon \sum m_j \frac{\textbf{v}_{ji}}{\overline{\rho}_{ij}} W_{ij}
 ```
 
 ### Corrected Smoothed Particle Method (CSPM) 
